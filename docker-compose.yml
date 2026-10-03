@@ -1,0 +1,45 @@
+services:
+  code-server:
+    build:
+      context: .
+      args:
+        CODE_SERVER_VERSION: ${CODE_SERVER_VERSION:-4.140.0-ls368}
+    image: dev-code-server:local
+    container_name: code-server
+    restart: unless-stopped
+    environment:
+      PUID: ${PUID}
+      PGID: ${PGID}
+      TZ: ${TZ:-Europe/Berlin}
+      PASSWORD: ${PASSWORD}
+      DEFAULT_WORKSPACE: ${PROJECTS_DIR}
+    group_add:
+      - "${DOCKER_GID}"
+    security_opt:
+      - no-new-privileges:true
+    volumes:
+      - ./config:/config
+      # Same absolute path inside and outside, so bind mounts in project
+      # containers (started via the VM's Docker daemon) resolve correctly.
+      - ${PROJECTS_DIR}:${PROJECTS_DIR}
+      - /var/run/docker.sock:/var/run/docker.sock
+    ports:
+      - "127.0.0.1:8443:8443"
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:8443/healthz"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 40s
+
+  cloudflared:
+    image: cloudflare/cloudflared:${CLOUDFLARED_VERSION:-2026.9.3}
+    container_name: cloudflared
+    restart: unless-stopped
+    profiles: ["tunnel"]
+    command: tunnel --no-autoupdate run
+    environment:
+      TUNNEL_TOKEN: ${TUNNEL_TOKEN:-}
+    depends_on:
+      code-server:
+        condition: service_healthy
