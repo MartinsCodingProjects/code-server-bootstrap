@@ -7,6 +7,10 @@ services:
     image: dev-code-server:local
     container_name: code-server
     restart: unless-stopped
+    # Explicit upstream (the libvirt host's dnsmasq): at boot Docker can start the
+    # container before dhcpcd writes the VM's /etc/resolv.conf and then has no DNS.
+    dns:
+      - 192.168.150.1
     environment:
       PUID: ${PUID}
       PGID: ${PGID}
@@ -37,6 +41,8 @@ services:
     container_name: cloudflared
     restart: unless-stopped
     profiles: ["tunnel"]
+    dns:
+      - 192.168.150.1
     command: tunnel --no-autoupdate run
     environment:
       TUNNEL_TOKEN: ${TUNNEL_TOKEN:-}
