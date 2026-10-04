@@ -229,7 +229,23 @@ host$ sudo reboot
 notebook$ getent hosts <new>.fritz.box                 # wait until it resolves, then update HostName in ~/.ssh/config
 ```
 
-## 9. Troubleshooting
+## 9. Setup scripts (fresh install, test VMs)
+
+```bash
+notebook$ setup/notebook-setup.sh [--dry-run]          # key, aliases, copy the key to the host
+host$ setup/host-setup.sh [--dry-run]                  # re-runnable: unchanged things are left alone
+host$ setup/create-vm.sh                               # new VM from the Debian cloud image
+host$ setup/create-vm.sh --finish [--name N]           # after the first boot: remove the seed disk
+host$ setup/create-vm.sh --name devvm2 --ip 192.168.150.11 --mac 52:54:00:aa:bb:11   # a test VM
+host$ setup/create-vm.sh --remove --name devvm2 --ip 192.168.150.11 --mac 52:54:00:aa:bb:11
+notebook$ ssh devvm 'bash -s -- <router-ip> <host-lan-ip> 192.168.150.1' < setup/verify-isolation.sh
+notebook$ ssh devvm 'cloud-init status --wait'         # first boot finished? ("status: done")
+```
+
+Answers are remembered in `setup/setup.env` (git-ignored). See
+[setup-scripts.md](setup-scripts.md) for what each script does.
+
+## 10. Troubleshooting
 
 | Symptom | Check | Fix |
 |---|---|---|

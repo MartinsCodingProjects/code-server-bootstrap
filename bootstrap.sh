@@ -25,7 +25,7 @@ install_docker() {
   command -v docker >/dev/null 2>&1 && return
   . /etc/os-release
   [ "${ID:-}" = "debian" ] || die "automatic Docker install supports Debian only; install Docker Engine + Compose plugin manually"
-  info "Installing Docker Engine"
+  info "Installing Docker Engine (sudo may ask for your password)"
   sudo apt-get update
   sudo apt-get install -y ca-certificates curl
   sudo install -m 0755 -d /etc/apt/keyrings
@@ -58,32 +58,77 @@ read_secret() { # prompt -> REPLY
   read -rsp "$p" REPLY; echo
 }
 
-ask_password() {
-  if [ -n "${DEV_PASSWORD:-}" ]; then PASSWORD_VALUE=$DEV_PASSWORD
-  else
-    local a b
-    while :; do
-      read_secret "code-server password (min 12 chars): "; a=$REPLY
-      read_secret "repeat password: "; b=$REPLY
-      [ "$a" = "$b" ] || { echo "Passwords differ."; continue; }
-      PASSWORD_VALUE=$a; break
-    done
+explain() { local l; while IFS= read -r l; do printf '    | %s\n' "$l"; done <<<"$*"; }
+
+valid_password() { # sets PW_ERROR
+  [ "${#1}" -ge 12 ] || { PW_ERROR="at least 12 characters are required"; return 1; }
+  case "$1" in *\'*|*$'\n'*) PW_ERROR="it must not contain a ' (single quote) or a newline"; return 1 ;; esac
+}
+
+valid_token() { # an empty token is fine (skip); sets TOKEN_ERROR
+  local t=$1
+  [ -n "$t" ] || return 0
+  case "$t" in
+    *[[:space:]]*) TOKEN_ERROR="it contains spaces. Paste only the token (the part after '--token'), not the whole command"; return 1 ;;
+    *[!A-Za-z0-9=_+/.-]*) TOKEN_ERROR="it contains unexpected characters. Paste only the token"; return 1 ;;
+  esac
+  if [[ "$t" =~ ^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$ ]]; then
+    TOKEN_ERROR="that looks like the tunnel ID (a UUID), not the token. The token is a much longer string starting with eyJ"
+    return 1
   fi
-  [ "${#PASSWORD_VALUE}" -ge 12 ] || die "password must be at least 12 characters"
-  case "$PASSWORD_VALUE" in *\'*|*$'\n'*) die "password must not contain ' or newlines" ;; esac
+  case "$t" in eyJ*) ;; *) TOKEN_ERROR="a tunnel token starts with 'eyJ'"; return 1 ;; esac
+}
+
+ask_password() {
+  if [ -n "${DEV_PASSWORD:-}" ]; then
+    PASSWORD_VALUE=$DEV_PASSWORD
+    valid_password "$PASSWORD_VALUE" || die "DEV_PASSWORD: $PW_ERROR"
+    return
+  fi
+  echo
+  explain "code-server password
+This is the second login gate: first Cloudflare Access asks who you are (GitHub login),
+then code-server asks for this password. At least 12 characters, no single quote (').
+Nothing is shown while you type. It is stored only in .env (mode 600) on this VM, never in git.
+Change it later with: ./bootstrap.sh --reconfigure"
+  local a b
+  while :; do
+    read_secret "  code-server password: "; a=$REPLY
+    valid_password "$a" || { echo "  Not accepted: $PW_ERROR. Try again."; continue; }
+    read_secret "  repeat password: "; b=$REPLY
+    [ "$a" = "$b" ] || { echo "  The two entries differ. Try again."; continue; }
+    PASSWORD_VALUE=$a; break
+  done
 }
 
 ask_token() {
-  if [ -n "${TUNNEL_TOKEN:-}" ]; then TOKEN_VALUE=$TUNNEL_TOKEN
-  elif [ -t 0 ]; then
-    read_secret "Cloudflare Tunnel token (Enter to skip, local-only for now): "; TOKEN_VALUE=$REPLY
-  else TOKEN_VALUE=""; fi
-  case "$TOKEN_VALUE" in
-    *[!A-Za-z0-9=_+/.-]*) die "tunnel token contains unexpected characters" ;;
-  esac
+  if [ -n "${TUNNEL_TOKEN:-}" ]; then
+    TOKEN_VALUE=$TUNNEL_TOKEN
+    valid_token "$TOKEN_VALUE" || die "TUNNEL_TOKEN: $TOKEN_ERROR"
+    return
+  fi
+  if [ ! -t 0 ]; then TOKEN_VALUE=""; return; fi
+  echo
+  explain "Cloudflare Tunnel token
+The tunnel makes this VM reachable from the internet without opening any port: the
+'cloudflared' container connects OUT to Cloudflare, and your browser reaches code-server through it.
+Where to find the token: Cloudflare dashboard > Zero Trust > Networks > Tunnels > your tunnel >
+'Add a connector' > Docker. In the command shown there, copy ONLY the long string after
+'--token' (it starts with 'eyJ'). The tunnel ID is NOT the token. The tunnel's public hostname
+must point to service type HTTP, URL code-server:8443.
+Paste it as one line; nothing is shown. Press Enter to skip: code-server then runs only on
+127.0.0.1:8443 inside this VM (reach it with: ssh -L 8443:127.0.0.1:8443 devvm).
+Add the token later with: ./bootstrap.sh --reconfigure"
+  while :; do
+    read_secret "  tunnel token (Enter to skip): "; TOKEN_VALUE=$REPLY
+    valid_token "$TOKEN_VALUE" && break
+    echo "  Not accepted: $TOKEN_ERROR. Try again, or press Enter to skip."
+  done
 }
 
 write_env() {
+  explain "Two questions follow: the code-server password and the Cloudflare Tunnel token.
+Both are kept only in .env (mode 600) on this VM."
   ask_password
   ask_token
   local tz=${TZ:-}

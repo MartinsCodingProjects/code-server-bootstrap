@@ -1,3 +1,4 @@
 .env
 config/
 projects/
+setup/setup.env

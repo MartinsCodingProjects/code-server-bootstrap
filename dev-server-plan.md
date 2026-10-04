@@ -125,6 +125,12 @@ the notebook, SSH to the host and manage the guest there (for example, with
 
 ## Step-by-Step Build Plan
 
+**Automated path.** The scripts in `setup/` carry out Phases 0.3 to 0.7, 1.1 to 1.6
+and 5.2 and 5.3 for you (see the README, "Fresh install", and
+[doc/setup-scripts.md](doc/setup-scripts.md)). The VM is created from the Debian
+cloud image with cloud-init instead of the interactive installer in 1.4. The steps
+below remain the explanation of what happens and the manual fallback.
+
 Conventions: `<admin>` is your Linux username (same on host and VM), `devhost`
 is the physical host, `devvm` is the guest. The Fritzbox LAN is assumed to be
 `192.168.178.0/24` (Fritzbox default) — adjust if yours differs. Lines marked

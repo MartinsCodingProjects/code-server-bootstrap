@@ -13,7 +13,29 @@ git-ignored). Claude Code is logged in interactively and `gh` with a
 fine-grained GitHub token (`gh auth login --with-token`, see Phase 4 of the plan)
 from the code-server terminal; credentials live in `./config`.
 
-## Quick start (inside the Debian VM, as a normal user with sudo)
+## Fresh install: the setup scripts
+
+From a freshly installed Debian host to a working stack, mostly by script. Every
+script explains each question before it asks it and can be re-run safely
+(`--dry-run` shows what it would do). Details, the safety design and a test
+protocol: [doc/setup-scripts.md](doc/setup-scripts.md).
+
+| Step | Where | Command |
+|---|---|---|
+| 0. Install Debian 13 on the host (netinst; hostname `devhost`, root password empty, SSH server and standard utilities only) and set the BIOS option "Restore on AC power loss: Power On" | host console | by hand (plan 0.1, 5.1) |
+| 1. SSH key and aliases | notebook | `setup/notebook-setup.sh` |
+| 2. Harden the host, firewall, KVM, VM network | host | `sudo apt install -y git && git clone <this repo> ~/dev-server-repo && ~/dev-server-repo/setup/host-setup.sh` |
+| 3. Create the VM (Debian cloud image and cloud-init) | host | `~/dev-server-repo/setup/create-vm.sh` |
+| 4. Wait for the first boot, then start the stack | notebook, then VM | `ssh devvm 'cloud-init status --wait'`, `ssh devvm`, `cd ~/dev-server && ./bootstrap.sh` |
+| 5. Check isolation and health | notebook | `ssh devvm 'bash -s -- <router-ip> <host-lan-ip> 192.168.150.1' < setup/verify-isolation.sh`, then `./bootstrap.sh --check` in the VM |
+| 6. Remove the seed disk (holds a password hash) | host | `~/dev-server-repo/setup/create-vm.sh --finish` |
+
+Still by hand, because there is no API or it is physical: the Cloudflare tunnel,
+its public hostname and the Access policy (plan 2.1 and Phase 3; you paste the
+tunnel token into `bootstrap.sh`), the GitHub fine-grained token and the Claude
+login (plan Phase 4).
+
+## Quick start (container stack only; inside the VM, as a normal user with sudo)
 
 ```bash
 git clone https://github.com/MartinsCodingProjects/code-server-bootstrap.git ~/dev-server
@@ -38,12 +60,14 @@ served; reach it from your notebook with `ssh -L 8443:127.0.0.1:8443 devvm`.
 
 | Path | Purpose |
 |---|---|
+| `setup/` | Scripts for a fresh install: notebook, host and VM creation, isolation check |
 | `Dockerfile` | code-server + Node.js, Claude Code, `gh`, tmux, Docker CLI/Compose |
 | `docker-compose.yml` | `code-server` and `cloudflared` (profile `tunnel`) |
 | `.env.example` | Documents the variables `bootstrap.sh` writes |
 | `config/` | code-server user data and logins (git-ignored) |
 | `projects/` | Your workspaces (git-ignored), mounted at the same absolute path inside the container |
 | `doc/cli-cheatsheet.md` | Commands for operating and maintaining the setup, plus troubleshooting |
+| `doc/setup-scripts.md` | What the setup scripts do, their safety design, test protocol |
 | `doc/` | Also notes kept for the record, e.g. the resolved review of this setup |
 
 ## Updating
