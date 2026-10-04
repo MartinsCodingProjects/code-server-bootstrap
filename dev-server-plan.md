@@ -508,11 +508,15 @@ ct$ gh auth login                 # GitHub.com → HTTPS → "Login with a web b
 ct$ gh auth setup-git
 ct$ gh auth status
 ct$ claude                        # follow the interactive login; complete the browser flow
-ct$ tmux new -As work             # create or re-attach the named session
+ct$ terminal-w                    # create or re-attach the named session
 ```
 
+`terminal-w` is an alias for `tmux new -As work`, baked into the image
+(`/etc/bash.bashrc`) by the Dockerfile that `bootstrap.sh` builds. It is not
+attached automatically, so each terminal tab stays independent until you run it.
+
 Detach with `Ctrl+b d`, close the browser tab, reopen it, and run
-`tmux new -As work` again: the session and any running `claude` process remain.
+`terminal-w` again: the session and any running `claude` process remain.
 Set Claude usage limits/alerts in your Anthropic account console. Use a GitHub
 login with the narrowest repository access you can.
 

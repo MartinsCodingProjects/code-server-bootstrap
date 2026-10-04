@@ -47,6 +47,11 @@ served; reach it from your notebook with `ssh -L 8443:127.0.0.1:8443 devvm`.
 - The container mounts the VM's Docker socket so projects can build and run
   containers. That grants control of the VM's Docker daemon: the VM, not the
   container, is the security boundary.
+- In the code-server terminal, `terminal-w` (alias for `tmux new -As work`)
+  creates or re-attaches the persistent tmux session. It is built into the image
+  by `bootstrap.sh`; it is not attached automatically, so plain terminal tabs
+  stay independent. Inside tmux it prints "sessions should be nested with care",
+  which only means you are already in a session.
 - Image versions are pinned in the Dockerfile/Compose defaults and `.env.example`.
   Bump them in a commit, then run `./bootstrap.sh --update`.
 - Tunnel origin must be `http://code-server:8443` (not `localhost`).

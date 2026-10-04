@@ -16,8 +16,11 @@ RUN apt-get update \
  && apt-get clean && rm -rf /var/lib/apt/lists/*
 
 # The abc user's login shell is /bin/false, which tmux would use for new windows
-# and exit immediately; point tmux at bash instead.
-RUN echo 'set -g default-shell /bin/bash' > /etc/tmux.conf
+# and exit immediately; point tmux at bash instead. `terminal-w` attaches to (or
+# creates) the persistent "work" session; it is an alias, not an automatic
+# attach, so each terminal tab stays independent unless you run it.
+RUN echo 'set -g default-shell /bin/bash' > /etc/tmux.conf \
+ && echo "alias terminal-w='tmux new -As work'" >> /etc/bash.bashrc
 
 # Docker CLI + Compose talk to the VM's Docker daemon through the mounted socket.
 COPY --from=docker:cli /usr/local/bin/docker /usr/local/bin/docker
