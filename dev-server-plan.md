@@ -730,10 +730,24 @@ vm$ docker image prune -f                                # only once the new ver
 host$ df -h /var/lib/libvirt/images && sudo virsh domblklist devvm
 vm$ df -h / && docker system df
 ```
-- Backups are out of scope for the first prototype. Before relying on the
-  environment, add backups for the VM/projects and persistent config, and test
-  a restore. Git is not a backup for untracked files, local configuration, or
-  credentials.
+- **Recovery without backups (a deliberate decision: no backup target is
+  available).** Recovery is a rebuild: reinstall the host, follow Phases 0-5 and
+  re-run `./bootstrap.sh`.
+  - Reproduced from this repo and plan: host, firewall, VM, Docker stack.
+  - Re-created by you: the code-server password, a new GitHub token, the Claude
+    login, and the tunnel token (the tunnel and its hostname live in Cloudflare;
+    copy the token from the tunnel's connector page, and note that "Refresh
+    token" invalidates the old one). Keep a copy of the notebook's
+    `~/.ssh/id_ed25519_devhost`; it is not on the server.
+  - **Lost:** anything in `projects/` that is not pushed to GitHub (uncommitted
+    changes, untracked files, local-only branches) and the code-server
+    settings, extensions and shell history in `config/`. Commit and push
+    regularly (WIP branches are fine) and never keep the only copy of anything
+    on the server.
+  - Optional later: copy the VM disk (`/home/libvirt/images/`, VM shut down)
+    to the spare internal disk, which only covers a failing system disk, or to
+    an off-site target. Git is not a backup for untracked files, local
+    configuration, or credentials.
 
 ## Prototype Acceptance Checks
 

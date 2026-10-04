@@ -98,6 +98,10 @@ the OS packages of the base image; only a newer base tag does.
 - Image versions are pinned in the Dockerfile/Compose defaults and `.env.example`;
   see [Updating](#updating) for the bump-and-apply procedure.
 - Tunnel origin must be `http://code-server:8443` (not `localhost`).
+- There are no backups. A rebuild from this repo and the plan restores the
+  setup; only work that is not pushed to GitHub and the code-server settings in
+  `config/` are lost, so push regularly (the plan's Operations section lists
+  what to re-create).
 - Compose pins `dns: 192.168.150.1` (the libvirt host's resolver from the plan). At boot
   Docker can otherwise start the container before `dhcpcd` wrote the VM's
   `/etc/resolv.conf` and leave it without DNS. Change it if your libvirt network differs.
