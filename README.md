@@ -43,7 +43,8 @@ served; reach it from your notebook with `ssh -L 8443:127.0.0.1:8443 devvm`.
 | `.env.example` | Documents the variables `bootstrap.sh` writes |
 | `config/` | code-server user data and logins (git-ignored) |
 | `projects/` | Your workspaces (git-ignored), mounted at the same absolute path inside the container |
-| `doc/` | Notes kept for the record, e.g. the resolved review of this setup |
+| `doc/cli-cheatsheet.md` | Commands for operating and maintaining the setup, plus troubleshooting |
+| `doc/` | Also notes kept for the record, e.g. the resolved review of this setup |
 
 ## Updating
 

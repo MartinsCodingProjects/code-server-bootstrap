@@ -129,7 +129,11 @@ Conventions: `<admin>` is your Linux username (same on host and VM), `devhost`
 is the physical host, `devvm` is the guest. The Fritzbox LAN is assumed to be
 `192.168.178.0/24` (Fritzbox default) — adjust if yours differs. Lines marked
 `notebook$` run on your notebook, `host$` on the physical host, `vm$` inside
-the guest, and `ct$` in the code-server terminal.
+the guest, and `ct$` in the code-server terminal. Run `sudo -v` first when you
+paste a multi-line block (a password prompt swallows the lines after it), and run
+commands that prompt (`su -`, `ssh-copy-id`, `./bootstrap.sh`) on their own. The
+SSH aliases from 0.3 and 1.5 exist only on the notebook. Day-to-day commands are
+in [doc/cli-cheatsheet.md](doc/cli-cheatsheet.md).
 
 ### Phase 0: Fresh Debian host, SSH access, baseline hardening
 
@@ -407,7 +411,7 @@ table inet hostfw {
 }
 EOF
 host$ sudo nft -c -f /etc/nftables.conf && sudo nft -f /etc/nftables.conf
-host$ sudo nft list ruleset | grep -E 'table|chain'   # libvirt tables must still be present
+host$ sudo nft list ruleset | grep -E 'table|chain'   # libvirt's tables must still be present (on Debian 13 they appear as ip filter / ip nat with LIBVIRT_* chains, via iptables-nft)
 ```
 
 The guest cannot initiate connections to the host, the LAN, or other private
