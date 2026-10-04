@@ -15,6 +15,10 @@ RUN apt-get update \
  && npm install -g @anthropic-ai/claude-code \
  && apt-get clean && rm -rf /var/lib/apt/lists/*
 
+# The abc user's login shell is /bin/false, which tmux would use for new windows
+# and exit immediately; point tmux at bash instead.
+RUN echo 'set -g default-shell /bin/bash' > /etc/tmux.conf
+
 # Docker CLI + Compose talk to the VM's Docker daemon through the mounted socket.
 COPY --from=docker:cli /usr/local/bin/docker /usr/local/bin/docker
 COPY --from=docker:cli /usr/local/libexec/docker/cli-plugins/docker-compose /usr/local/libexec/docker/cli-plugins/docker-compose
