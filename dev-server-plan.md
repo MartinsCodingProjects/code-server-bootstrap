@@ -447,7 +447,7 @@ inside the cloudflared container that is cloudflared itself).
 ```bash
 notebook$ ssh devvm                              # via the host (ProxyJump)
 vm$ sudo apt install -y git
-vm$ git clone https://github.com/<you>/dev-server.git ~/dev-server
+vm$ git clone https://github.com/MartinsCodingProjects/code-server-bootstrap.git ~/dev-server
 vm$ cd ~/dev-server && ./bootstrap.sh
 ```
 

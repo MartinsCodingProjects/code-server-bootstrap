@@ -14,7 +14,7 @@ code-server terminal; credentials live in `./config`.
 ## Quick start (inside the Debian VM, as a normal user with sudo)
 
 ```bash
-git clone https://github.com/<you>/dev-server.git ~/dev-server
+git clone https://github.com/MartinsCodingProjects/code-server-bootstrap.git ~/dev-server
 cd ~/dev-server
 ./bootstrap.sh
 ```
