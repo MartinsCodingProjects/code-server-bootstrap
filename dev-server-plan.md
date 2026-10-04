@@ -73,10 +73,11 @@ the notebook, SSH to the host and manage the guest there (for example, with
    retain code-server's own authentication and do not publish its port publicly.
 7. **Persist browser-session work with tmux.** tmux is for disconnect/reconnect
    continuity, not container or VM restart recovery.
-8. **Authenticate from inside code-server.** Sign in to Claude Code and GitHub
-   interactively in the container; do not bake credentials into the image or
-   put them in Compose environment variables. Persist the relevant user config
-   with restrictive permissions.
+8. **Authenticate from inside code-server.** Sign in to Claude Code
+   interactively and to GitHub with a fine-grained token (no broad OAuth scopes)
+   in the container; do not bake credentials into the image or put them in
+   Compose environment variables. Persist the relevant user config with
+   restrictive permissions.
 9. **Git for source sync.** Use Git to move project changes between devices;
    no real-time collaboration is required.
 10. **Everything must come back unattended after a hardware reboot or power
@@ -588,11 +589,12 @@ gate).
 Run these in the code-server integrated terminal.
 
 ```bash
-ct$ git config --global user.name  "Your Name"
-ct$ git config --global user.email "you@example.com"
-ct$ gh auth login                 # GitHub.com → HTTPS → "Login with a web browser" (device code)
+ct$ gh auth login --with-token    # paste the fine-grained token, Enter, then Ctrl+D (see below)
 ct$ gh auth setup-git
 ct$ gh auth status
+ct$ gh api user --jq '"\(.id)+\(.login)@users.noreply.github.com"'   # your noreply commit address
+ct$ git config --global user.name  "Your Name"
+ct$ git config --global user.email "<the noreply address printed above>"
 ct$ claude                        # follow the interactive login; complete the browser flow
 ct$ terminal-w                    # create or re-attach the named session
 ```
@@ -605,9 +607,20 @@ Detach with `Ctrl+b d`, close the browser tab, reopen it, and run
 `terminal-w` again: the session and any running `claude` process remain.
 Login pitfalls inside the container:
 
-- `gh auth login`: do not press Ctrl+C at "Press Enter to open ...". Leave it
-  waiting, open `https://github.com/login/device` in a browser yourself and enter
-  the code; the CLI finishes on its own.
+- GitHub token: use a **fine-grained personal access token**, not the browser
+  device login (that OAuth token gets the broad `repo` and `workflow` scopes and
+  never expires). Create it at `github.com/settings/personal-access-tokens/new`:
+  resource owner = your account, *All repositories*, repository permissions
+  Contents, Pull requests and Issues **Read and write**, Metadata read, and
+  nothing else (no Workflows, Administration or Secrets), expiry 90 days. Log in
+  with `gh auth login --with-token`. `gh repo create` needs Administration, so
+  create repos in the web UI. If you logged in with the device flow before, run
+  `gh auth logout` (it only deletes the local copy) and revoke "GitHub CLI" under
+  `github.com/settings/applications`. Rotate before the expiry by repeating
+  `gh auth logout` and `gh auth login --with-token`. Add a ruleset on `main`
+  (require a pull request) to repos that matter. (If you do use the browser flow,
+  do not press Ctrl+C at "Press Enter to open ...": open
+  `https://github.com/login/device` yourself and enter the code while `gh` waits.)
 - `claude`: the browser redirect points at `localhost`, which is the notebook, not
   the container. Do not click the link: copy the URL by hand, authorize in a new
   tab and paste the code at "Paste code here".
@@ -617,8 +630,7 @@ Login pitfalls inside the container:
   GitHub's settings. Set `git config user.email` on every machine that commits,
   or the push is rejected.
 
-Set Claude usage limits/alerts in your Anthropic account console. Use a GitHub
-login with the narrowest repository access you can.
+Set Claude usage limits/alerts in your Anthropic account console.
 
 Verify credentials survive a container recreation:
 
@@ -700,6 +712,10 @@ the host reboot.
   unattended-upgrades origins do not cover them, so run `sudo apt upgrade`
   in the VM occasionally (a Docker daemon restart restarts the containers).
 - Review Cloudflare Access/Tunnel status and host/guest disk space periodically.
+- Rotate credentials on a schedule: the GitHub fine-grained token before it
+  expires (90 days), and the code-server password or tunnel token when needed
+  (`./bootstrap.sh --reconfigure`; a tunnel token can be refreshed in the
+  Cloudflare dashboard).
 
 ```bash
 # security updates: automatic (unattended-upgrades); check what happened

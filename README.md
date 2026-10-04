@@ -9,8 +9,9 @@ inside the VM.
 
 This repository is public and contains no secrets. Passwords and the tunnel
 token are entered at bootstrap time and stored only in `.env` (mode 600,
-git-ignored). Claude Code and GitHub are logged in interactively from the
-code-server terminal; credentials live in `./config`.
+git-ignored). Claude Code is logged in interactively and `gh` with a
+fine-grained GitHub token (`gh auth login --with-token`, see Phase 4 of the plan)
+from the code-server terminal; credentials live in `./config`.
 
 ## Quick start (inside the Debian VM, as a normal user with sudo)
 
