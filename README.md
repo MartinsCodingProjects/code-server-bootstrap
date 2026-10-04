@@ -56,6 +56,66 @@ served; reach it from your notebook with `ssh -L 8443:127.0.0.1:8443 devvm`.
 | `./bootstrap.sh --check` | Read-only health check of the running stack (non-zero exit on failure) |
 | `DEV_PASSWORD=... TUNNEL_TOKEN=... ./bootstrap.sh` | Non-interactive |
 
+## Developing in the browser (Flask, FastAPI, Vite and React)
+
+The container has Python 3.12 with `uv`, Node.js 22 with npm, git, `gh`, tmux, the
+Docker CLI and Claude Code. Keep projects under `projects/` (the terminal opens
+there). Dev servers run **inside the container**; to open them in your browser,
+give each one a hostname of its own through the tunnel.
+
+**One-time, in the Cloudflare dashboard** (per app you want to open in the browser):
+
+1. Zero Trust, Networks, Tunnels, your tunnel, Public Hostname, Add: subdomain
+   e.g. `web`, your domain, service type **HTTP**, URL **`code-server:5173`**
+   (the Vite port). Add `api` with `code-server:8000` if you want to open the
+   FastAPI docs, `flask` with `code-server:5000`, and so on. The tunnel reaches the
+   container's ports directly, so nothing is published on the VM.
+2. Add every new hostname to your **Access application** (same GitHub login
+   policy). A hostname without it would be a public dev server.
+3. On the VM, list them so `./bootstrap.sh --check` verifies the Access redirect for
+   each: `echo "DEV_HOSTS='web.yourdomain.com api.yourdomain.com'" >> ~/dev-server/.env`
+
+**Every day:** start the server listening on all interfaces and open its hostname.
+
+```bash
+ct$ cd /home/martin/dev-server/projects/myapp
+ct$ uv run flask --app app run --host 0.0.0.0 --port 5000 --debug       # Flask
+ct$ uv run uvicorn app:app --host 0.0.0.0 --port 8000 --reload          # FastAPI (docs at /docs)
+ct$ npm run dev -- --host                                               # Vite / React
+ct$ uv run pytest;  npm test                                            # tests
+```
+
+Vite needs to accept the hostname and send hot-reload over https (`vite.config.js`):
+
+```js
+export default defineConfig({
+  server: {
+    host: true,                                   // all interfaces inside the container
+    port: 5173,
+    allowedHosts: ['web.yourdomain.com'],         // Vite rejects unknown Host headers
+    hmr: { clientPort: 443 },                     // hot reload websocket through https
+    proxy: { '/api': 'http://localhost:8000' },   // frontend and API on ONE origin
+  },
+})
+```
+
+Let the frontend call the API through that Vite proxy (`fetch('/api/...')`).
+Calling `api.yourdomain.com` from `web.yourdomain.com` is a cross-origin request, and
+Cloudflare Access (a cookie per hostname) blocks it. Use a separate hostname only for
+pages you open directly, such as FastAPI's `/docs`.
+
+Without any Cloudflare change you can use code-server's built-in proxy for a quick look:
+`https://dev.yourdomain.com/absproxy/5173/` keeps the path, so set Vite's
+`base: '/absproxy/5173/'`; `/proxy/8000/` strips it (`uvicorn ... --root-path /proxy/8000`).
+Flask needs prefix handling for this, so use a hostname for Flask.
+
+**Docker-based projects:** `docker compose` works through the mounted socket. Bind
+mounts resolve on the **VM**, so keep them under `projects/` (same path inside and
+out). Publish ports as `127.0.0.1:PORT:PORT` and reach them with
+`ssh -L PORT:127.0.0.1:PORT devvm`. For browser tests run a test image inside the
+container's network: `docker run --rm --network container:code-server <image> ...`
+(then `localhost:5173` is your dev server).
+
 ## Layout
 
 | Path | Purpose |
@@ -82,8 +142,8 @@ ends running tmux sessions and Claude processes.
    - `CODE_SERVER_VERSION`: the `ARG` in `Dockerfile`, the default in
      `docker-compose.yml`, and `.env.example`.
    - `CLOUDFLARED_VERSION`: the default in `docker-compose.yml` and `.env.example`.
-   - `DOCKER_CLI_VERSION` (optional): the `ARG` in `Dockerfile`; the tag is
-     `docker:<version>-cli`.
+   - `DOCKER_CLI_VERSION` and `UV_VERSION` (optional): the `ARG`s in `Dockerfile`;
+     the tags are `docker:<version>-cli` and `ghcr.io/astral-sh/uv:<version>`.
 3. **Apply on the VM:** `cd ~/dev-server && ./bootstrap.sh --update`. It pulls,
    continues in the freshly pulled script, refreshes `PUID`, `PGID`, `DOCKER_GID`,
    `PROJECTS_DIR` and the pinned versions in `.env` (Compose prefers `.env`;

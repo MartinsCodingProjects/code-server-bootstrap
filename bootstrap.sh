@@ -133,8 +133,11 @@ Both are kept only in .env (mode 600) on this VM."
   ask_token
   local tz=${TZ:-}
   [ -n "$tz" ] || tz=$(timedatectl show -p Timezone --value 2>/dev/null || echo Europe/Berlin)
+  local keep_hosts
+  keep_hosts=$(grep '^DEV_HOSTS=' .env 2>/dev/null || true)
   umask 077
   {
+    [ -z "$keep_hosts" ] || echo "$keep_hosts"
     echo "PUID=$(id -u)"
     echo "PGID=$(id -g)"
     echo "DOCKER_GID=$(getent group docker | cut -d: -f3)"
@@ -205,6 +208,14 @@ run_checks() { # read-only verification of the running stack
   else
     pass "no tunnel token configured (local-only)"
   fi
+  local h answer
+  for h in $(sed -n 's/^DEV_HOSTS=//p' .env 2>/dev/null | tr -d "'\""); do
+    answer=$(curl -s -o /dev/null -m 8 -w '%{http_code} %{redirect_url}' "https://$h" || true)
+    case "$answer" in
+      30[1278]\ https://*.cloudflareaccess.com/*) pass "$h is behind Cloudflare Access" ;;
+      *) fail "$h is NOT behind Cloudflare Access (answer: ${answer:-none}); add it to the Access application" ;;
+    esac
+  done
   "${DOCKER[@]}" exec -u abc code-server curl -fsS -m 8 -o /dev/null https://github.com >/dev/null 2>&1 \
     && pass "container DNS and internet" || fail "container cannot reach github.com (DNS or egress)"
   "${DOCKER[@]}" exec -u abc code-server sh -c 'claude --version && gh --version && tmux -V && docker ps' >/dev/null 2>&1 \
