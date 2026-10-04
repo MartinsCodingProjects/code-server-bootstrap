@@ -109,6 +109,16 @@ write_env() {
   info "Wrote .env (mode 600)"
 }
 
+# .env is kept across runs, so repo bumps of the pinned image versions must be
+# copied into it, or Compose keeps using the old values from .env.
+sync_versions() {
+  local line key
+  while IFS= read -r line; do
+    key=${line%%=*}
+    if grep -q "^$key=" .env; then sed -i "s|^$key=.*|$line|" .env; else echo "$line" >> .env; fi
+  done < <(grep -E '^(CODE_SERVER|CLOUDFLARED)_VERSION=' .env.example)
+}
+
 install_docker
 setup_docker_access
 
@@ -123,6 +133,10 @@ if [ ! -f .env ] || [ "$MODE" = "--reconfigure" ]; then
   write_env
 else
   info "Keeping existing .env (use --reconfigure to change password/token)"
+  if [ "$MODE" = "--update" ]; then
+    sync_versions
+    info "Synced pinned image versions from .env.example"
+  fi
 fi
 
 info "Building and starting"
