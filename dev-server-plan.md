@@ -46,7 +46,7 @@ the notebook, SSH to the host and manage the guest there (for example, with
 | AI agent | Claude Code, installed in the code-server image | Available in the integrated terminal |
 | Session persistence | tmux | Keeps terminal processes alive across browser disconnects |
 | Remote access | Cloudflare Tunnel (`cloudflared`) | Outbound connection; no inbound router port forwarding |
-| Authentication | Cloudflare Access plus code-server authentication | Defense in depth for the browser IDE |
+| Authentication | Cloudflare Access (GitHub login) plus code-server authentication | Defense in depth for the browser IDE |
 | VM networking | libvirt NAT/private network with guest egress restrictions | Internet access without general access to the host or LAN |
 | Hardware | Spare computer, wired Ethernet | — |
 
@@ -482,8 +482,11 @@ Until this is done, only the code-server password protects the public hostname.
 
 **3.1 Access policy (dashboard)**
 
-Zero Trust → Access → Applications → Add → Self-hosted → domain
-`dev.yourdomain.com` → policy *Allow* for your email/GitHub/Google account only.
+Zero Trust → Access → Applications → Add → Self-hosted and private →
+destination type *Public DNS* → `dev.yourdomain.com` → policy *Allow* for your
+own identity only. Log in with the **GitHub** login method (OAuth), which is
+already configured under Settings → Authentication and also protects other
+domains; the one-time-PIN email login is not used.
 
 **3.2 Verify (from a phone on mobile data, plus CLI)**
 
@@ -491,7 +494,8 @@ Zero Trust → Access → Applications → Add → Self-hosted → domain
 notebook$ curl -sI https://dev.yourdomain.com | head -n5   # redirect to *.cloudflareaccess.com
 ```
 
-After login you should see the code-server password prompt (second gate).
+After the GitHub login you should see the code-server password prompt (second
+gate).
 
 ### Phase 4: Authentication and workflow
 

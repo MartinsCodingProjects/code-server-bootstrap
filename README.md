@@ -2,7 +2,8 @@
 
 Browser-based dev environment for a personal Debian VM: **code-server** (VS Code
 in the browser) with Claude Code, GitHub CLI, tmux, Node.js and Docker CLI,
-exposed through a **Cloudflare Tunnel**. Setup of the host and VM is described
+exposed through a **Cloudflare Tunnel** behind **Cloudflare Access** (GitHub
+login) and code-server's own password. Setup of the host and VM is described
 in [dev-server-plan.md](dev-server-plan.md); this repo is the part that runs
 inside the VM.
 
