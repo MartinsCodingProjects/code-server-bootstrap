@@ -132,7 +132,10 @@ the guest, and `ct$` in the code-server terminal.
 - Wired Ethernet into the Fritzbox. Use the netinst ISO.
 - Hostname `devhost`. Leave the **root password empty** (this locks root and
   installs `sudo` with your user in the `sudo` group). Create `<admin>` with a
-  strong password (needed for `sudo`).
+  strong password (needed for `sudo`). If you set a root password anyway, `sudo`
+  is not installed: run `su -`, `apt install -y sudo`, `usermod -aG sudo <admin>`,
+  `exit` and log in again, **one line at a time** (pasted together, `su -`
+  swallows the following lines as its password input).
 - Partitioning: guided, whole disk, **no disk encryption** (an unattended boot
   must not wait for a passphrase).
 - Software selection: untick desktop environment; tick only **SSH server** and
@@ -149,22 +152,41 @@ Fritzbox UI → Home Network → Network → Network Connections → `devhost` �
 "Always assign this network device the same IPv4 address". The Fritzbox also
 resolves the name, so `devhost.fritz.box` works from the notebook.
 
+If that option is not available, rely on the name: `devhost.fritz.box` follows
+the IP. The DNS name comes from the hostname the machine announces via DHCP, not
+from the label shown in the Fritzbox UI, and it changes at the next lease. To
+rename the host later: `sudo hostnamectl set-hostname <new>`, fix the
+`127.0.1.1` line in `/etc/hosts` (otherwise `sudo` complains "unable to resolve
+host"), reboot, wait until `getent hosts <new>.fritz.box` resolves on the
+notebook, then update `HostName` in the notebook's SSH config.
+
 **0.3 SSH key login from the notebook (WLAN → Fritzbox → host)**
 
 ```bash
-notebook$ ssh-keygen -t ed25519 -a 100 -C "notebook->devhost"   # set a passphrase
-notebook$ ssh-copy-id -i ~/.ssh/id_ed25519.pub <admin>@devhost.fritz.box
-notebook$ ssh <admin>@devhost.fritz.box                         # confirm key login works
+notebook$ ssh-keygen -t ed25519 -a 100 -C "notebook->devhost" -f ~/.ssh/id_ed25519_devhost   # set a passphrase
+notebook$ ssh-copy-id -i ~/.ssh/id_ed25519_devhost.pub <admin>@devhost.fritz.box
+notebook$ ssh -i ~/.ssh/id_ed25519_devhost <admin>@devhost.fritz.box   # confirm key login works
 ```
 
 Convenience entry on the notebook (`~/.ssh/config`):
 
 ```
 Host devhost
+  AddKeysToAgent yes
   HostName devhost.fritz.box
   User <admin>
-  IdentityFile ~/.ssh/id_ed25519
+  IdentityFile ~/.ssh/id_ed25519_devhost
+  IdentitiesOnly yes
+  AddressFamily inet
 ```
+
+Use a dedicated key with a passphrase for the servers (do not reuse an existing
+passphrase-less key). `AddressFamily inet` forces IPv4, because the host
+firewall allows SSH over IPv4 only; `AddKeysToAgent` asks for the passphrase
+once per session. Run all `ssh` tests on the notebook: the aliases exist only
+in the notebook's `~/.ssh/config`. If the key is lost, log in at the host's
+console (password login still works there) and add a new public key to
+`~/.ssh/authorized_keys`.
 
 **0.4 Key-only SSH, no root login**
 
@@ -261,6 +283,29 @@ host$ sudo smartctl -H /dev/sda                  # disk health (use your device 
 host$ sudo apt purge -y <anything-you-do-not-need> && sudo apt autoremove -y
 ```
 
+CPU microcode and mitigations (old hardware):
+
+```bash
+host$ grep . /sys/devices/system/cpu/vulnerabilities/*
+host$ sudo apt install -y intel-microcode       # amd64-microcode on AMD; reboot to load
+host$ sudo dmesg | grep -i microcode             # "Updated early from: ..." shows it loaded
+```
+
+The OS loads newer microcode than an old BIOS carries, so a BIOS update is rarely
+needed. Some old CPUs stay at `Vulnerable: No microcode` for a flaw because the
+vendor never published a fix (an i5-6400 for GDS/"Downfall"); the rest should
+show `Mitigation: ...`. With a single trusted guest this residual risk is accepted.
+
+Console keyboard layout (the Debian console defaults to US):
+
+```bash
+host$ sudo sed -i 's/^XKBLAYOUT=.*/XKBLAYOUT="de"/' /etc/default/keyboard
+host$ sudo setupcon -k --save
+```
+
+The login prompt on the host's console after boot is normal and does not block
+services (sshd, libvirt, Docker start before it). Do not enable auto-login.
+
 Laptop as server? Prevent suspend on lid close:
 
 ```bash
@@ -278,13 +323,14 @@ SSH is key-only and reachable from the LAN only.
 
 ```bash
 host$ grep -Ec '(vmx|svm)' /proc/cpuinfo         # >0 means CPU virtualization is available
-host$ sudo apt install -y qemu-system-x86 libvirt-daemon-system libvirt-clients virtinst ovmf osinfo-db
+host$ sudo apt install -y qemu-system-x86 libvirt-daemon-system libvirt-clients virtinst ovmf osinfo-db libosinfo-bin
 host$ sudo adduser <admin> libvirt               # log out/in afterwards
 host$ lsmod | grep kvm
 host$ sudo virsh list --all
 ```
 
-If `grep` prints 0, enable VT-x/AMD-V in the firmware first.
+If `grep` prints 0, enable VT-x/AMD-V in the firmware first. (The count can be
+twice the number of cores because of a `vmx flags` line: a 4-core CPU prints 8.)
 
 **1.2 Private NAT network for the guest**
 
@@ -306,6 +352,20 @@ host$ sudo virsh net-define devnet.xml
 host$ sudo virsh net-start devnet
 host$ sudo virsh net-autostart devnet
 host$ sudo virsh net-list --all
+```
+
+**1.2b Storage pool for the guest disk**
+
+The default image directory `/var/lib/libvirt/images` lives on `/`, which guided
+partitioning can leave small (about 19 GB here, with the rest in `/home`). Check
+with `df -h` and put the guest disk where the space is:
+
+```bash
+host$ sudo virsh pool-define-as vmpool dir --target /home/libvirt/images
+host$ sudo virsh pool-build vmpool
+host$ sudo virsh pool-start vmpool
+host$ sudo virsh pool-autostart vmpool
+host$ sudo virsh pool-list --all
 ```
 
 **1.3 Isolate the guest: internet only, no host, no LAN, no IPv6**
@@ -349,14 +409,16 @@ ranges; the host can still open connections *to* the guest (SSH, virsh).
 
 **1.4 Create the guest (headless install over the serial console)**
 
-Adjust RAM/vCPUs/disk to the spare hardware.
+Adjust RAM/vCPUs/disk to the spare hardware. The guest's RAM must stay well
+below the host's total (7.6 GiB here, so 5 GiB for the guest); vCPUs up to the
+host's core count work, but a busy guest then competes with the host.
 
 ```bash
 host$ osinfo-query os | grep -i 'debian1[23]'    # use debian12 below if debian13 is missing
 host$ sudo virt-install \
   --name devvm \
-  --memory 8192 --vcpus 4 --cpu host-passthrough \
-  --disk size=100,format=qcow2,bus=virtio \
+  --memory 5120 --vcpus 4 --cpu host-passthrough \
+  --disk pool=vmpool,size=100,format=qcow2,bus=virtio \
   --network network=devnet,model=virtio,mac=52:54:00:aa:bb:10 \
   --osinfo debian13 \
   --graphics none --console pty,target_type=serial \
@@ -366,7 +428,11 @@ host$ sudo virt-install \
 
 In the text installer: hostname `devvm`, empty root password, user `<admin>`,
 whole-disk partitioning **without encryption**, software = **SSH server** and
-**standard system utilities** only. Leave the console with `Ctrl+]`.
+**standard system utilities** only (untick the desktop environment). Install
+GRUB to the virtual disk (`/dev/vda`). Leave the console with `Ctrl+]`. After the
+final reboot the console can stay quiet, or the guest can end up powered off
+(`sudo virsh start devvm`); test with `ssh <admin>@192.168.150.10` from the host
+(password login, before hardening).
 
 ```bash
 host$ sudo virsh list --all
@@ -381,12 +447,13 @@ On the notebook, extend `~/.ssh/config`:
 Host devvm
   HostName 192.168.150.10
   User <admin>
-  IdentityFile ~/.ssh/id_ed25519
+  IdentityFile ~/.ssh/id_ed25519_devhost
+  IdentitiesOnly yes
   ProxyJump devhost
 ```
 
 ```bash
-notebook$ ssh-copy-id -i ~/.ssh/id_ed25519.pub devvm
+notebook$ ssh-copy-id -i ~/.ssh/id_ed25519_devhost.pub devvm
 notebook$ ssh devvm
 ```
 
@@ -413,12 +480,12 @@ vm$ timedatectl                                   # clock synchronized: yes
 ```bash
 vm$ ping -c2 1.1.1.1                                              # works
 vm$ curl -sI https://deb.debian.org | head -n1                    # works
-vm$ for t in 192.168.178.1:80 192.168.150.1:22 <host-LAN-IP>:22; do
+vm$ for t in 192.168.178.1:80 192.168.178.1:53 192.168.150.1:22 <host-LAN-IP>:22 <notebook-IP>:22; do
       timeout 3 bash -c "</dev/tcp/${t%:*}/${t#*:}" 2>/dev/null \
         && echo "REACHABLE (BAD): $t" || echo "blocked (good): $t"
     done
 vm$ curl -6 -m5 -sS https://ipv6.google.com -o /dev/null || echo "IPv6 blocked (good)"
-host$ ssh <admin>@192.168.150.10 hostname                         # host -> guest still works
+notebook$ ssh devvm hostname                                      # host -> guest still works (jump through the host; the host itself holds no key for the key-only guest)
 ```
 
 Do not continue until every "blocked" check is blocked.
@@ -437,10 +504,14 @@ notebook$ gh repo create dev-server --public --source=. --push
 
 **2.1 Create the tunnel and get its token (Cloudflare dashboard)**
 
-Zero Trust → Networks → Tunnels → Create tunnel (Cloudflared) → copy the token
-(keep it handy, do not paste it into chat or commit it). Public hostname:
-`dev.yourdomain.com` → service **`http://code-server:8443`** (not `localhost`;
-inside the cloudflared container that is cloudflared itself).
+Zero Trust → Networks → Tunnels → Create tunnel (Cloudflared). The **tunnel ID is
+not the token.** The token is the long string starting with `eyJ` in the tunnel's
+"Install and run a connector" page: copy only the part after `--token` (or after
+`cloudflared service install`) and ignore the install commands, because
+`cloudflared` runs as a container here. Keep it out of chat and git. Public
+hostname: subdomain `dev`, your domain, empty path, service type **HTTP**, URL
+**`code-server:8443`** (not `localhost`; inside the cloudflared container that is
+cloudflared itself).
 
 **2.2 Clone and bootstrap (inside the VM)**
 
@@ -455,7 +526,10 @@ The script installs Docker Engine (Debian repo from Docker), asks for the
 code-server password (min. 12 chars, typed twice) and the tunnel token (Enter to
 skip), writes `.env` with mode 600, then builds and starts code-server and, when
 a token was given, `cloudflared`. Re-run it any time; use `--reconfigure` to
-change the password or token.
+change the password or token. Run the commands one at a time (the script prompts
+for input) and paste the token as a single line without any `cloudflared ...
+--token` prefix; the script rejects spaces. Until you log in again, the new
+`docker` group membership is not active, so use `sudo docker ...` in that session.
 
 **2.3 Verify**
 
@@ -464,6 +538,18 @@ vm$ cd ~/dev-server && docker compose ps          # code-server healthy, cloudfl
 vm$ docker compose logs --tail=30 cloudflared     # "Registered tunnel connection"
 vm$ docker exec -u abc code-server sh -c 'claude --version && gh --version | head -1 && tmux -V && docker ps'
 ```
+
+Check that the container resolves DNS and cannot reach the LAN. Compose pins
+`dns: 192.168.150.1` because at boot Docker can start the container before
+`dhcpcd` has written the VM's `/etc/resolv.conf`, which leaves the container
+without any DNS upstream:
+
+```bash
+vm$ docker exec -u abc code-server bash -c 'curl -sS -I https://github.com | head -n1'   # HTTP/2 200
+vm$ docker exec -u abc code-server bash -c 'for t in 192.168.178.1:80 <host-LAN-IP>:22 <notebook-IP>:22; do timeout 3 bash -c "</dev/tcp/${t%:*}/${t#*:}" 2>/dev/null && echo "REACHABLE (BAD): $t" || echo "blocked (good): $t"; done'
+```
+
+(The VM's own Docker bridge, `172.17.0.1`, is reachable on purpose.)
 
 Without a token, test locally from the notebook:
 
@@ -517,6 +603,20 @@ attached automatically, so each terminal tab stays independent until you run it.
 
 Detach with `Ctrl+b d`, close the browser tab, reopen it, and run
 `terminal-w` again: the session and any running `claude` process remain.
+Login pitfalls inside the container:
+
+- `gh auth login`: do not press Ctrl+C at "Press Enter to open ...". Leave it
+  waiting, open `https://github.com/login/device` in a browser yourself and enter
+  the code; the CLI finishes on its own.
+- `claude`: the browser redirect points at `localhost`, which is the notebook, not
+  the container. Do not click the link: copy the URL by hand, authorize in a new
+  tab and paste the code at "Paste code here".
+- Commit email: use the GitHub noreply address (`gh api user --jq
+  '"\(.id)+\(.login)@users.noreply.github.com"'`) and enable "Keep my email
+  addresses private" and "Block command line pushes that expose my email" in
+  GitHub's settings. Set `git config user.email` on every machine that commits,
+  or the push is rejected.
+
 Set Claude usage limits/alerts in your Anthropic account console. Use a GitHub
 login with the narrowest repository access you can.
 
@@ -548,16 +648,12 @@ host$ sudo sed -i 's/^#\?ON_BOOT=.*/ON_BOOT=start/; s/^#\?ON_SHUTDOWN=.*/ON_SHUT
 **5.3 Host: firewall rules must exist before the VM starts**
 
 ```bash
-host$ sudo systemctl edit libvirtd           # add the following, save
-```
-
-```
+host$ sudo mkdir -p /etc/systemd/system/libvirtd.service.d
+host$ sudo tee /etc/systemd/system/libvirtd.service.d/10-after-nftables.conf >/dev/null <<'EOF'
 [Unit]
 After=nftables.service
 Wants=nftables.service
-```
-
-```bash
+EOF
 host$ sudo systemctl daemon-reload
 host$ systemctl show libvirtd -p After | tr ' ' '\n' | grep nftables
 ```
@@ -576,10 +672,17 @@ vm$ timedatectl | grep synchronized                 # NTP on (wrong clock breaks
 ```bash
 host$ sudo reboot                                  # or pull the power plug
 # wait a few minutes, touch nothing, then from the notebook:
-notebook$ ssh devhost 'sudo virsh list --all; sudo nft list table inet hostfw | head -n3'
+notebook$ ssh -t devhost 'virsh -c qemu:///system list --all; sudo nft list table inet hostfw | head -n3'   # -t lets sudo ask for the password
 notebook$ ssh devvm 'docker compose -f ~/dev-server/docker-compose.yml ps'
+notebook$ ssh devvm "docker exec -u abc code-server curl -sS -I https://github.com | head -n1"   # DNS works without a manual restart
 notebook$ curl -sI https://dev.yourdomain.com | head -n3   # Access redirect again
 ```
+
+The Access redirect alone does not prove the tunnel works (Cloudflare answers it
+at its edge). Cloudflare **error 1033** means no `cloudflared` is connected:
+usually the VM is off (no `virsh autostart devvm`) or the containers are down.
+Run a soft reboot first and then a real power-loss test (pull the plug); the
+firmware setting from 5.1 must bring the machine back on its own.
 
 Also test a guest-only reboot (`vm$ sudo reboot`) and
 `vm$ sudo systemctl restart docker`; rerun the Phase 1.7 isolation checks after
@@ -623,6 +726,8 @@ vm$ df -h / && docker system df
 - The guest can reach required internet services and Cloudflare, but cannot
   initiate connections to host or LAN/private destinations over IPv4 or IPv6.
 - A project can build and run Docker containers inside the guest.
+- code-server resolves DNS and has internet right after a reboot, without a
+  manual container restart, and still cannot reach the LAN.
 - The Cloudflare Access login protects code-server, and its origin port is not
   publicly exposed.
 - Claude Code and GitHub authentication work from the code-server terminal and

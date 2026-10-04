@@ -55,3 +55,6 @@ served; reach it from your notebook with `ssh -L 8443:127.0.0.1:8443 devvm`.
 - Image versions are pinned in the Dockerfile/Compose defaults and `.env.example`.
   Bump them in a commit, then run `./bootstrap.sh --update`.
 - Tunnel origin must be `http://code-server:8443` (not `localhost`).
+- Compose pins `dns: 192.168.150.1` (the libvirt host's resolver from the plan). At boot
+  Docker can otherwise start the container before `dhcpcd` wrote the VM's
+  `/etc/resolv.conf` and leave it without DNS. Change it if your libvirt network differs.
