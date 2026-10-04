@@ -1,4 +1,8 @@
 ARG CODE_SERVER_VERSION=4.140.0-ls368
+ARG DOCKER_CLI_VERSION=29.8.2
+
+FROM docker:${DOCKER_CLI_VERSION}-cli AS dockercli
+
 FROM lscr.io/linuxserver/code-server:${CODE_SERVER_VERSION}
 
 ARG NODE_MAJOR=22
@@ -23,5 +27,5 @@ RUN echo 'set -g default-shell /bin/bash' > /etc/tmux.conf \
  && echo "alias terminal-w='tmux new -As work'" >> /etc/bash.bashrc
 
 # Docker CLI + Compose talk to the VM's Docker daemon through the mounted socket.
-COPY --from=docker:cli /usr/local/bin/docker /usr/local/bin/docker
-COPY --from=docker:cli /usr/local/libexec/docker/cli-plugins/docker-compose /usr/local/libexec/docker/cli-plugins/docker-compose
+COPY --from=dockercli /usr/local/bin/docker /usr/local/bin/docker
+COPY --from=dockercli /usr/local/libexec/docker/cli-plugins/docker-compose /usr/local/libexec/docker/cli-plugins/docker-compose

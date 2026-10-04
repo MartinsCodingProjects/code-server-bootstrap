@@ -1,3 +1,10 @@
+# Rotate container logs; the default json-file driver never does and can fill the VM disk.
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+
 services:
   code-server:
     build:
@@ -7,6 +14,7 @@ services:
     image: dev-code-server:local
     container_name: code-server
     restart: unless-stopped
+    logging: *default-logging
     # Explicit upstream (the libvirt host's dnsmasq): at boot Docker can start the
     # container before dhcpcd writes the VM's /etc/resolv.conf and then has no DNS.
     dns:
@@ -41,6 +49,14 @@ services:
     container_name: cloudflared
     restart: unless-stopped
     profiles: ["tunnel"]
+    logging: *default-logging
+    # cloudflared needs no capabilities and no writable filesystem (tested with a
+    # real tunnel connection).
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
     dns:
       - 192.168.150.1
     command: tunnel --no-autoupdate run

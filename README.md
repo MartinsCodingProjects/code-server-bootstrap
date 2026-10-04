@@ -30,7 +30,8 @@ served; reach it from your notebook with `ssh -L 8443:127.0.0.1:8443 devvm`.
 |---|---|
 | `./bootstrap.sh` | First run or re-run; keeps an existing `.env` |
 | `./bootstrap.sh --reconfigure` | Ask for password and token again |
-| `./bootstrap.sh --update` | `git pull`, sync pinned image versions into `.env`, rebuild, restart |
+| `./bootstrap.sh --update` | `git pull`, re-run the pulled script, refresh host-derived values and pinned versions in `.env`, rebuild, restart |
+| `./bootstrap.sh --check` | Read-only health check of the running stack (non-zero exit on failure) |
 | `DEV_PASSWORD=... TUNNEL_TOKEN=... ./bootstrap.sh` | Non-interactive |
 
 ## Layout
@@ -55,11 +56,15 @@ ends running tmux sessions and Claude processes.
    - `CODE_SERVER_VERSION`: the `ARG` in `Dockerfile`, the default in
      `docker-compose.yml`, and `.env.example`.
    - `CLOUDFLARED_VERSION`: the default in `docker-compose.yml` and `.env.example`.
+   - `DOCKER_CLI_VERSION` (optional): the `ARG` in `Dockerfile`; the tag is
+     `docker:<version>-cli`.
 3. **Apply on the VM:** `cd ~/dev-server && ./bootstrap.sh --update`. It pulls,
-   copies the pinned versions from `.env.example` into `.env` (Compose prefers
-   `.env`), rebuilds and restarts. A new base tag rebuilds every layer, so `apt`
+   continues in the freshly pulled script, refreshes `PUID`, `PGID`, `DOCKER_GID`,
+   `PROJECTS_DIR` and the pinned versions in `.env` (Compose prefers `.env`;
+   password, token and `TZ` are kept), rebuilds and restarts. A new base tag rebuilds every layer, so `apt`
    packages, Node.js, `gh` and Claude Code are refreshed too.
-4. **Verify:**
+4. **Verify:** `./bootstrap.sh --check` runs the checks below in one go
+   (read-only; non-zero exit on failure). By hand:
    ```bash
    docker compose ps                              # code-server healthy, cloudflared up
    docker compose logs --tail=30 cloudflared      # "Registered tunnel connection"
@@ -102,6 +107,10 @@ the OS packages of the base image; only a newer base tag does.
   setup; only work that is not pushed to GitHub and the code-server settings in
   `config/` are lost, so push regularly (the plan's Operations section lists
   what to re-create).
+- `bootstrap.sh` sets `config/` to mode 700. Container logs rotate (3 x 10 MB per
+  service). `cloudflared` runs read-only with all capabilities dropped; code-server
+  cannot (its init needs them, and the mounted Docker socket is root in the VM
+  anyway).
 - Compose pins `dns: 192.168.150.1` (the libvirt host's resolver from the plan). At boot
   Docker can otherwise start the container before `dhcpcd` wrote the VM's
   `/etc/resolv.conf` and leave it without DNS. Change it if your libvirt network differs.

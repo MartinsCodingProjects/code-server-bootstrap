@@ -534,6 +534,10 @@ for input) and paste the token as a single line without any `cloudflared ...
 
 **2.3 Verify**
 
+`./bootstrap.sh --check` bundles most of the checks below (clock, Docker, compose
+config, container health, tunnel connections, container DNS and internet, tools,
+disk, pending reboot). It is read-only and does not test LAN isolation (Phase 1.7).
+
 ```bash
 vm$ cd ~/dev-server && docker compose ps          # code-server healthy, cloudflared up
 vm$ docker compose logs --tail=30 cloudflared     # "Registered tunnel connection"

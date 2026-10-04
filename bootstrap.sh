@@ -6,6 +6,7 @@
 #   ./bootstrap.sh                # first run / re-run (keeps existing .env)
 #   ./bootstrap.sh --reconfigure  # ask for password/token again
 #   ./bootstrap.sh --update       # git pull, rebuild, restart
+#   ./bootstrap.sh --check        # verify the running stack (read-only)
 #
 # Non-interactive: DEV_PASSWORD=... TUNNEL_TOKEN=... ./bootstrap.sh
 set -euo pipefail
@@ -18,7 +19,7 @@ die() { echo "ERROR: $*" >&2; exit 1; }
 info() { echo "==> $*"; }
 
 [ "$(id -u)" -ne 0 ] || die "run as your normal user (needs sudo), not as root"
-case "$MODE" in ""|--reconfigure|--update) ;; *) die "unknown option: $MODE" ;; esac
+case "$MODE" in ""|--reconfigure|--update|--check) ;; *) die "unknown option: $MODE" ;; esac
 
 install_docker() {
   command -v docker >/dev/null 2>&1 && return
@@ -109,34 +110,92 @@ write_env() {
   info "Wrote .env (mode 600)"
 }
 
+set_env() { # key value: replace the line in .env or append it
+  local key=$1 val=$2
+  val=${val//\\/\\\\}; val=${val//&/\\&}; val=${val//|/\\|}
+  if grep -q "^$key=" .env; then sed -i "s|^$key=.*|$key=$val|" .env; else echo "$key=$2" >> .env; fi
+}
+
 # .env is kept across runs, so repo bumps of the pinned image versions must be
 # copied into it, or Compose keeps using the old values from .env.
 sync_versions() {
-  local line key
+  local line
   while IFS= read -r line; do
-    key=${line%%=*}
-    if grep -q "^$key=" .env; then sed -i "s|^$key=.*|$line|" .env; else echo "$line" >> .env; fi
+    set_env "${line%%=*}" "${line#*=}"
   done < <(grep -E '^(CODE_SERVER|CLOUDFLARED)_VERSION=' .env.example)
 }
+
+# Values derived from this host and clone can go stale after a restore or move
+# (different docker GID or clone path); recompute them, keep password/token/TZ.
+sync_env() {
+  local gid
+  gid=$(getent group docker | cut -d: -f3)
+  set_env PUID "$(id -u)"
+  set_env PGID "$(id -g)"
+  [ -z "$gid" ] || set_env DOCKER_GID "$gid"
+  set_env PROJECTS_DIR "$REPO_DIR/projects"
+  sync_versions
+}
+
+run_checks() { # read-only verification of the running stack
+  local fails=0 warns=0 state running n use
+  pass() { echo "  ok    $*"; }
+  warn() { echo "  WARN  $*"; warns=$((warns + 1)); }
+  fail() { echo "  FAIL  $*"; fails=$((fails + 1)); }
+  if docker info >/dev/null 2>&1; then DOCKER=(docker); else DOCKER=(sudo docker); fi
+
+  [ "$(timedatectl show -p NTPSynchronized --value 2>/dev/null)" = yes ] \
+    && pass "clock synchronized" || fail "clock not synchronized (breaks the tunnel)"
+  systemctl is-active --quiet docker && pass "docker running" || fail "docker not running"
+  [ "$(stat -c %a .env 2>/dev/null)" = 600 ] && pass ".env mode 600" || warn ".env missing or not mode 600"
+  [ "$(stat -c %a config 2>/dev/null)" = 700 ] && pass "config/ mode 700" || warn "config/ is not mode 700"
+  "${DOCKER[@]}" compose config -q 2>/dev/null && pass "compose config valid" || fail "compose config invalid"
+  state=$("${DOCKER[@]}" inspect -f '{{.State.Health.Status}}' code-server 2>/dev/null || true)
+  [ "$state" = healthy ] && pass "code-server healthy" || fail "code-server health: ${state:-not found}"
+  if grep -q '^TUNNEL_TOKEN=.' .env 2>/dev/null; then
+    running=$("${DOCKER[@]}" inspect -f '{{.State.Running}}' cloudflared 2>/dev/null || true)
+    n=$("${DOCKER[@]}" compose logs --tail=1000 cloudflared 2>/dev/null | grep -c 'Registered tunnel connection' || true)
+    [ "$running" = true ] && [ "${n:-0}" -gt 0 ] \
+      && pass "cloudflared up ($n tunnel connections in the recent log)" || fail "cloudflared not running or no tunnel connection"
+  else
+    pass "no tunnel token configured (local-only)"
+  fi
+  "${DOCKER[@]}" exec -u abc code-server curl -fsS -m 8 -o /dev/null https://github.com >/dev/null 2>&1 \
+    && pass "container DNS and internet" || fail "container cannot reach github.com (DNS or egress)"
+  "${DOCKER[@]}" exec -u abc code-server sh -c 'claude --version && gh --version && tmux -V && docker ps' >/dev/null 2>&1 \
+    && pass "claude, gh, tmux and the docker socket work in the container" || fail "tools or docker socket not working in the container"
+  use=$(df -P . | awk 'NR==2 {gsub("%", "", $5); print $5}')
+  [ "$use" -lt 90 ] && pass "disk usage ${use}%" || warn "disk usage ${use}%"
+  [ -f /var/run/reboot-required ] && warn "reboot required (kernel update)" || pass "no reboot pending"
+  echo "$fails failed, $warns warnings"
+  [ "$fails" -eq 0 ]
+}
+
+if [ "$MODE" = "--check" ]; then
+  run_checks
+  exit $?
+fi
+
+# Pull first, then continue in the freshly pulled copy: otherwise this run would
+# keep executing the old script logic.
+if [ "$MODE" = "--update" ] && [ -z "${BOOTSTRAP_PULLED:-}" ]; then
+  info "Pulling latest repo changes"
+  git pull --ff-only
+  BOOTSTRAP_PULLED=1 exec "$REPO_DIR/bootstrap.sh" --update
+fi
 
 install_docker
 setup_docker_access
 
-if [ "$MODE" = "--update" ]; then
-  info "Pulling latest repo changes"
-  git pull --ff-only
-fi
-
 mkdir -p config projects
+chmod 700 config
 
 if [ ! -f .env ] || [ "$MODE" = "--reconfigure" ]; then
   write_env
 else
   info "Keeping existing .env (use --reconfigure to change password/token)"
-  if [ "$MODE" = "--update" ]; then
-    sync_versions
-    info "Synced pinned image versions from .env.example"
-  fi
+  sync_env
+  info "Refreshed host-derived values and pinned versions in .env"
 fi
 
 info "Building and starting"
