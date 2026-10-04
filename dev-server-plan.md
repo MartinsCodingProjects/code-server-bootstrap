@@ -117,6 +117,11 @@ the notebook, SSH to the host and manage the guest there (for example, with
 - A VM reduces the impact of a guest/container compromise, but is not an
   absolute guarantee against hypervisor vulnerabilities, misconfiguration, or
   data the guest is intentionally allowed to access.
+- The mounted Docker socket makes anything running in code-server root in the
+  VM. The Cloudflare Access policy, the code-server password and the VM's egress
+  rules are the barriers. Do not run Claude Code with permission prompts disabled
+  (`--dangerously-skip-permissions`) in this container. Health is checked on
+  demand with `./bootstrap.sh --check`; there is no continuous monitoring.
 
 ## Step-by-Step Build Plan
 
@@ -413,6 +418,9 @@ ranges; the host can still open connections *to* the guest (SSH, virsh).
 Adjust RAM/vCPUs/disk to the spare hardware. The guest's RAM must stay well
 below the host's total (7.6 GiB here, so 5 GiB for the guest); vCPUs up to the
 host's core count work, but a busy guest then competes with the host.
+`--cpu host-passthrough` ties the guest to this CPU model; after moving the disk
+to different hardware, switch it with `virsh edit devvm` to
+`<cpu mode='host-model'/>`.
 
 ```bash
 host$ osinfo-query os | grep -i 'debian1[23]'    # use debian12 below if debian13 is missing
@@ -737,7 +745,15 @@ vm$ df -h / && docker system df
 - **Recovery without backups (a deliberate decision: no backup target is
   available).** Recovery is a rebuild: reinstall the host, follow Phases 0-5 and
   re-run `./bootstrap.sh`.
-  - Reproduced from this repo and plan: host, firewall, VM, Docker stack.
+  - Reproduced from this repo and plan: host, firewall, VM, Docker stack. The
+    host-side state is all created by Phases 0-5: `/etc/nftables.conf`,
+    `devnet.xml` and the `vmpool` definition, the `libvirtd` drop-in,
+    `/etc/default/libvirt-guests`, and the guest definition (`virsh dumpxml
+    devvm` shows it). The firewall rules use no physical NIC names (`lo`, the
+    `virbr-dev` bridge and a subnet), so new hardware needs no edits. Set the
+    firmware's "Power On after AC loss" again (5.1). A rebuilt host has new SSH
+    host keys: the notebook warns once, fix it with `ssh-keygen -R
+    devhost.fritz.box`.
   - Re-created by you: the code-server password, a new GitHub token, the Claude
     login, and the tunnel token (the tunnel and its hostname live in Cloudflare;
     copy the token from the tunnel's connector page, and note that "Refresh

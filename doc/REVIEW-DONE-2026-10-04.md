@@ -1,3 +1,26 @@
+> **Status: worked through on 2026-10-04 and closed.** This file is the
+> review as it was written (it states that nothing was tested); the table below
+> records what became of each point. Kept for the record.
+
+| # | Point | Outcome | Where |
+|---|---|---|---|
+| 1 | Backups | **Declined.** No backup target; recovery is a rebuild, so push work regularly. | plan: "Recovery without backups"; README notes |
+| 2 | Stale `.env` | **Implemented.** `PUID`, `PGID`, `DOCKER_GID`, `PROJECTS_DIR` and the pins are refreshed on every run; password, token and `TZ` are kept. | `bootstrap.sh` (`sync_env`) |
+| 3 | `--update` rewrites the running script | **Implemented.** Pull first, then re-run the new copy. (Git swaps the file, so nothing was corrupted; the real effect was that a run used the old logic.) | `bootstrap.sh` |
+| 4 | Secrets visible in `docker inspect` | **Not done, accepted.** The mounted Docker socket is root in the VM and can read `.env` anyway. | plan: Security |
+| 5 | `config/` permissions | **Implemented.** Mode 700 on every run. | `bootstrap.sh` |
+| 6 | Unpinned build inputs | **Partly.** `docker:cli` is pinned. Claude Code, `docker-ce` and the base digest stay floating on purpose; a monthly checklist replaces Renovate, which cannot parse the `ARG`-based pins. | `Dockerfile`; README "Updating" |
+| 7 | Docker install idempotency | **Not done.** Edge case. | |
+| 8 | Preflight and `--check` | **Implemented** as `./bootstrap.sh --check`. No preflight step in the normal run. | `bootstrap.sh`; README; plan 2.3 |
+| 9 | Unbounded logs | **Implemented** per service in Compose (3 x 10 MB), not in `daemon.json`. | `docker-compose.yml` |
+| 10 | Container hardening | **Partly.** `cloudflared` is read-only with all capabilities dropped (tested with a real tunnel). Not for code-server: its init needs the capabilities and the socket is root anyway. No `mem_limit`, `pids_limit` or `cloudflared` healthcheck. | `docker-compose.yml` |
+| 11 | `host-passthrough` | **Documented**, no change. | plan 1.4 |
+| 12 | Record host state | **Documented.** All host-side state is reproduced by Phases 0-5. | plan: Recovery |
+| 13 | Rebuild runbook | **Covered** by the plan plus its Recovery checklist; no separate runbook. | plan: Recovery |
+| - | Residual risks | **Documented.** Fine-grained GitHub token in use and rotation noted; the no-`--dangerously-skip-permissions` warning added; monitoring is `--check` only. | plan: Security, Operations |
+
+---
+
 # Setup and bootstrap review: main suggested fixes
 
 Scope: `bootstrap.sh`, `Dockerfile`, `docker-compose.yml`, `.env.example`,
