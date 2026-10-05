@@ -253,7 +253,7 @@ Answers are remembered in `setup/setup.env` (git-ignored). See
 | Login page works, code-server page does not load | `vm$ ./bootstrap.sh --check` | Look at the failing line; `docker compose logs code-server` |
 | No internet or DNS in the container | `vm$ docker exec code-server cat /etc/resolv.conf` | Compose pins `dns: 192.168.150.1`; `docker compose up -d --force-recreate` |
 | Cannot SSH after a firewall change | `ping devhost.fritz.box` | At the host's console: `sudo nft flush table inet hostfw`, fix `/etc/nftables.conf`, re-apply |
-| `Could not resolve hostname` | `getent hosts devhost.fritz.box` | Use the IP until the Fritzbox picks up the name (new DHCP lease or reboot) |
+| `Could not resolve hostname`, or the router does not answer ping | `getent hosts devhost.fritz.box`; `ip -br a` shows a VPN interface (e.g. `nordtun`)? | A **VPN** on the notebook blocks the LAN and answers DNS itself: disconnect it (`nordvpn disconnect`) or allow the LAN (`nordvpn set lan-discovery on`) and use the host's IP. Otherwise wait until the Fritzbox picks up the name (new DHCP lease or reboot) |
 | `REMOTE HOST IDENTIFICATION HAS CHANGED` | rebuilt host or VM? | `ssh-keygen -R <name or IP>` |
 | `sudo: command not found` on a fresh Debian | root password was set at install | `su -`, `apt install -y sudo`, `usermod -aG sudo <user>`, log in again |
 | VM did not come back after a power cut | `virsh list --all`, `virsh dominfo devvm` | `virsh autostart devvm`; check the BIOS "Power On after AC loss" |
