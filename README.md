@@ -54,72 +54,71 @@ served; reach it from your notebook with `ssh -L 8443:127.0.0.1:8443 devvm`.
 | `./bootstrap.sh --reconfigure` | Ask for password and token again |
 | `./bootstrap.sh --update` | `git pull`, re-run the pulled script, refresh host-derived values and pinned versions in `.env`, rebuild, restart |
 | `./bootstrap.sh --check` | Read-only health check of the running stack (non-zero exit on failure) |
+| `./bootstrap.sh --dev-hosts` | Change the domain and ports for the dev app hostnames, restart code-server, print the Cloudflare checklist |
 | `DEV_PASSWORD=... TUNNEL_TOKEN=... ./bootstrap.sh` | Non-interactive |
 
-## Developing in the browser
+## Developing in the browser (Flask, FastAPI, Vite, React, ...)
 
-The container has Node.js 22 with npm, Python 3.12 with `venv` and `pip`, git, `gh`,
-tmux, the Docker CLI and Claude Code. Keep projects under `projects/`. Dev servers run
-inside the container; open them through **code-server's own proxy**, no tunnel change
-per project:
+The container has Node.js 22 with npm, Python 3.12 with `venv`, `pip` and `uv`, git,
+`gh`, tmux, the Docker CLI and Claude Code. Keep projects under `projects/`.
 
-- A server started in the code-server terminal is reachable at
-  `https://<your-ide-host>/proxy/<port>/`. Clicking the link a dev server prints
-  (for example `http://127.0.0.1:5000`) redirects there. It is behind the same
-  two gates as the IDE (Cloudflare Access, then the code-server password).
-- Addresses with an internal IP that a server prints (like `http://172.18.0.2:5000`)
-  do not work from your browser; use the `127.0.0.1` link or the `/proxy/` URL.
-- Flask works as it is (it listens on IPv4 `127.0.0.1`). **Vite does not**, see the
-  recipe below. FastAPI listens on IPv4 and needs nothing special.
+**The goal: a repo behaves the same on your laptop and in code-server.** Clone it,
+start the dev server with its normal command (`npm run dev`, `uvicorn app:app`,
+`flask run`), open it in the browser. No config file, `base` path or flag is changed
+for code-server. This works because every port is served at the **root of its own
+hostname**: `https://5173-dev.<domain>` shows what listens on port 5173 in the
+container, exactly like `http://localhost:5173` would.
+
+**Set up once:**
+
+1. `./bootstrap.sh` asks for your domain and the ports (default `5173 8000 5000 3000
+   4173 5174`), or run `./bootstrap.sh --dev-hosts` later to change them. It prints the
+   list of hostnames.
+2. In the Cloudflare dashboard, once per hostname (the entries live in your account and
+   survive rebuilds): Tunnel, Public Hostname, Add: the hostname, type **HTTP**, URL
+   **`code-server:8443`**. Then add the same **exact names** to your Access application.
+   Do not use a wildcard Access rule if the domain also hosts other sites. If the domain
+   already has a wildcard DNS record, explicit records override it for these names only.
+3. `./bootstrap.sh --check` lists which hostnames are not set up yet (or not behind Access).
+
+**Every day:** log in to the IDE once, start your servers, open `https://<port>-dev.<domain>`.
+One login covers all of them (the cookie is scoped to the parent domain). Without it a
+hostname answers 401.
+
+What changes in the container to make that work (nothing in your projects):
+`PROXY_DOMAIN` makes code-server proxy `<port>-dev.<domain>` to that port;
+`NODE_OPTIONS=--dns-result-order=ipv4first` makes Vite listen on IPv4 (its default is
+IPv6 only, which the proxy cannot reach: `ECONNREFUSED 0.0.0.0:5173`);
+`__VITE_ADDITIONAL_SERVER_ALLOWED_HOSTS` lets Vite accept those hostnames; and
+`patches/code-server-cookie-domain.js` fixes a code-server 4.140 bug that kept the login
+cookie on the IDE host. The build fails loudly if a new code-server version changes that
+code: check whether the bug is fixed upstream, then delete the patch and its two
+`Dockerfile` lines.
+
+Limits:
+
+- The browser code of a frontend must reach its API with a relative URL (Vite's `proxy`
+  for `/api` is the usual way). A hard-coded `http://localhost:8000` in browser code points
+  at the *viewer's* machine and cannot work from any remote browser. A backend can also be
+  opened directly at `https://8000-dev.<domain>`.
+- Tested in the container end to end (Vite and FastAPI at their hostnames, login cookie,
+  401 without it, hot-reload websocket upgrade) and with the feature turned off. Not tested:
+  real Cloudflare names and a browser session; clicking the link a dev server prints
+  (code-server rewrites it to the hostname pattern, expected but unverified).
+- `__VITE_ADDITIONAL_SERVER_ALLOWED_HOSTS` is an internal Vite variable (tested with Vite
+  8.3). Other dev servers with a host check (webpack-dev-server, Create React App, Next)
+  may need their own setting.
 - Python: the system Python is 3.12 and `pip install` outside a virtualenv is refused
   (by design). Use `uv` (included): `uv init`, `uv add fastapi uvicorn alembic
-  argon2-cffi`, `uv run uvicorn app:app --host 0.0.0.0 --port 8000`. Other versions,
-  e.g. 3.13, are downloaded on first use (`uv python install 3.13`, or
-  `uv init --python 3.13`, or a `.python-version` file) and kept in `./config`
-  (`HOME` is `/config`), so they survive container recreation. No pyenv: it compiles
-  Python from source and would need a compiler and many `-dev` libraries.
-  Tested with Python 3.13, FastAPI, Alembic and argon2-cffi.
-- **Vite/React with a FastAPI backend (tested end to end in the container).** Two
-  things go wrong with Vite's defaults:
-  1. Vite listens on IPv6 `::1` only, but the proxy connects over IPv4, which shows
-     the error `connect ECONNREFUSED 0.0.0.0:5173`. Fix: `server.host: '127.0.0.1'`.
-  2. `/proxy/<port>/` strips the path prefix, so the page's absolute URLs
-     (`/@vite/client`, `/src/main.tsx`) hit code-server and return 404 (blank page).
-     Fix: serve Vite under `/absproxy/<port>/`, which keeps the prefix, and tell
-     Vite with `base`. Open `https://<your-ide-host>/absproxy/5173/` directly.
-
-  `vite.config.ts` (the base only in dev, so production builds are unaffected):
-
-  ```ts
-  export default defineConfig(({ command }) => ({
-    plugins: [react()],
-    base: command === 'serve' ? '/absproxy/5173/' : '/',
-    server: {
-      host: '127.0.0.1',            // IPv4, so the proxy can connect
-      port: 5173,
-      strictPort: true,
-      hmr: { clientPort: 443 },     // hot reload websocket through https
-      proxy: {                      // the API on the same origin; the prefix is the dev base
-        '/absproxy/5173/api': {
-          target: 'http://127.0.0.1:8000',
-          rewrite: (p) => p.replace('/absproxy/5173', ''),
-        },
-      },
-    },
-  }))
-  ```
-
-  In the frontend call the API relative to the base, not with a leading slash:
-  `fetch(`${import.meta.env.BASE_URL}api/ping`)`. A plain `fetch('/api/ping')` goes to
-  code-server and returns 404. Start the backend on IPv4:
-  `uv run uvicorn app:app --host 127.0.0.1 --port 8000` (no `root_path` needed: Vite
-  strips the prefix before the request reaches FastAPI). Verified: page, assets, the
-  API call through Vite and the hot-reload websocket upgrade (HTTP 101) through the
-  proxy. Not verified: clicking the link Vite prints in the terminal (use the
-  `/absproxy/` URL above).
-- Docker-based projects: `docker compose` works through the mounted socket. Bind
-  mounts resolve on the VM, so keep them under `projects/` (same path inside and
-  out).
+  argon2-cffi`, `uv run uvicorn app:app`. Other versions, e.g. 3.13, are downloaded on
+  first use (`uv python install 3.13`, or `uv init --python 3.13`, or a `.python-version`
+  file) and kept in `./config` (`HOME` is `/config`), so they survive container
+  recreation. No pyenv: it compiles Python from source and would need a compiler and many
+  `-dev` libraries. Tested with Python 3.13, FastAPI, Alembic and argon2-cffi.
+- Without the hostnames (feature off), code-server's own path proxy `https://<ide-host>/proxy/<port>/`
+  still works for apps that listen on IPv4, such as Flask.
+- Docker-based projects: `docker compose` works through the mounted socket. Bind mounts
+  resolve on the VM, so keep them under `projects/` (same path inside and out).
 
 ## Layout
 

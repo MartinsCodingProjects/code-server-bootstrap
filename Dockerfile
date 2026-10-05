@@ -30,6 +30,10 @@ RUN echo 'set -g default-shell /bin/bash' > /etc/tmux.conf \
  && echo "alias terminal-w='tmux new -As work'" >> /etc/bash.bashrc \
  && echo 'unset VIRTUAL_ENV  # the base image points it at an empty /lsiopy; uv warns about it' >> /etc/bash.bashrc
 
+# Workaround for a code-server cookie bug with per-port hostnames (see the patch file).
+COPY patches/code-server-cookie-domain.js /tmp/code-server-cookie-domain.js
+RUN node /tmp/code-server-cookie-domain.js && rm /tmp/code-server-cookie-domain.js
+
 # uv: Python package, virtualenv and interpreter manager. It downloads prebuilt Python
 # versions on demand (into /config, which persists), so no compiler is needed.
 COPY --from=uv /uv /uvx /usr/local/bin/

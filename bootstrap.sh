@@ -7,6 +7,7 @@
 #   ./bootstrap.sh --reconfigure  # ask for password/token again
 #   ./bootstrap.sh --update       # git pull, rebuild, restart
 #   ./bootstrap.sh --check        # verify the running stack (read-only)
+#   ./bootstrap.sh --dev-hosts    # change the domain/ports for dev app hostnames
 #
 # Non-interactive: DEV_PASSWORD=... TUNNEL_TOKEN=... ./bootstrap.sh
 set -euo pipefail
@@ -19,7 +20,7 @@ die() { echo "ERROR: $*" >&2; exit 1; }
 info() { echo "==> $*"; }
 
 [ "$(id -u)" -ne 0 ] || die "run as your normal user (needs sudo), not as root"
-case "$MODE" in ""|--reconfigure|--update|--check) ;; *) die "unknown option: $MODE" ;; esac
+case "$MODE" in ""|--reconfigure|--update|--check|--dev-hosts) ;; *) die "unknown option: $MODE" ;; esac
 
 install_docker() {
   command -v docker >/dev/null 2>&1 && return
@@ -126,11 +127,116 @@ Add the token later with: ./bootstrap.sh --reconfigure"
   done
 }
 
+
+env_get() { sed -n "s/^$1=//p" .env 2>/dev/null | tail -n1 | tr -d "'\""; }
+
+DEFAULT_DEV_PORTS="5173 8000 5000 3000 4173 5174"
+
+valid_dev_pattern() { # sets DEV_ERROR
+  local p=$1
+  if ! [[ "$p" =~ ^[a-z0-9-]*\{\{port\}\}[a-z0-9-]*\.([a-z0-9-]+\.)+[a-z]{2,}$ ]]; then
+    DEV_ERROR="enter a domain like example.com (the names become <port>-dev.example.com)"
+    return 1
+  fi
+}
+
+# normalize_dev_domain INPUT: a bare domain becomes {{port}}-dev.<domain>; sets DEV_PATTERN
+normalize_dev_domain() {
+  local in=${1,,}
+  case "$in" in
+    *"{{port}}"*) DEV_PATTERN=$in ;;
+    *) DEV_PATTERN="{{port}}-dev.$in" ;;
+  esac
+  valid_dev_pattern "$DEV_PATTERN"
+}
+
+valid_dev_ports() { # sets DEV_ERROR
+  local p seen=" " n=0
+  for p in $1; do
+    [[ "$p" =~ ^[0-9]{4,5}$ ]] && [ "$p" -ge 1024 ] && [ "$p" -le 65535 ] \
+      || { DEV_ERROR="'$p' is not a port between 1024 and 65535"; return 1; }
+    [ "$p" != 8443 ] || { DEV_ERROR="8443 is code-server itself"; return 1; }
+    case "$seen" in *" $p "*) DEV_ERROR="port $p is listed twice"; return 1 ;; esac
+    seen="$seen$p "; n=$((n + 1))
+  done
+  [ "$n" -ge 1 ] || { DEV_ERROR="list at least one port"; return 1; }
+  [ "$n" -le 20 ] || { DEV_ERROR="at most 20 ports"; return 1; }
+}
+
+# ask_dev_hosts: sets DEV_PATTERN, DEV_PORTS_VALUE, DEV_ALLOWED_VALUE (all empty = feature off)
+ask_dev_hosts() {
+  local cur_pat cur_ports ans
+  cur_pat=$(env_get PROXY_DOMAIN); cur_ports=$(env_get DEV_PORTS)
+  DEV_PATTERN=""; DEV_PORTS_VALUE=""; DEV_ALLOWED_VALUE=""
+  if [ -n "${DEV_DOMAIN:-}" ]; then
+    normalize_dev_domain "$DEV_DOMAIN" || die "DEV_DOMAIN: $DEV_ERROR"
+    DEV_PORTS_VALUE=${DEV_PORTS:-${cur_ports:-$DEFAULT_DEV_PORTS}}
+    valid_dev_ports "$DEV_PORTS_VALUE" || die "DEV_PORTS: $DEV_ERROR"
+  elif [ ! -t 0 ]; then
+    DEV_PATTERN=$cur_pat; DEV_PORTS_VALUE=$cur_ports
+  else
+    echo
+    explain "Dev apps in your browser (optional)
+Apps you start in code-server (Vite, Flask, FastAPI, ...) can be opened at a hostname of their own,
+for example https://5173-dev.example.com for port 5173. The app is served at the root, exactly like
+on localhost, so NO project file needs a change and the same repo works on every device.
+Enter the domain you already use for the IDE (e.g. example.com). The hostnames become
+<port>-dev.<domain>. Each hostname needs one entry in the Cloudflare dashboard, once (it survives
+rebuilds); this script prints the list afterwards. Press Enter to skip, type - to turn it off.
+Add or change it later with: ./bootstrap.sh --dev-hosts"
+    while :; do
+      read -rp "  domain${cur_pat:+ [$cur_pat]}: " ans
+      if [ -z "$ans" ]; then DEV_PATTERN=$cur_pat; break; fi
+      if [ "$ans" = "-" ]; then DEV_PATTERN=""; break; fi
+      normalize_dev_domain "$ans" && break
+      echo "  Not accepted: $DEV_ERROR. Try again, press Enter to skip."
+    done
+    if [ -n "$DEV_PATTERN" ]; then
+      echo
+      explain "Which ports get a hostname? Space-separated. The default is Vite (5173), FastAPI (8000), Flask (5000),
+Node/Next (3000), vite preview (4173) and 5174 (Vite moves there when 5173 is already taken).
+Every port is one dashboard entry; ports you leave out cost nothing and can be added later."
+      while :; do
+        read -rp "  ports [${cur_ports:-$DEFAULT_DEV_PORTS}]: " ans
+        DEV_PORTS_VALUE=${ans:-${cur_ports:-$DEFAULT_DEV_PORTS}}
+        valid_dev_ports "$DEV_PORTS_VALUE" && break
+        echo "  Not accepted: $DEV_ERROR. Try again."
+      done
+    fi
+  fi
+  if [ -n "$DEV_PATTERN" ]; then
+    DEV_ALLOWED_VALUE=".${DEV_PATTERN#*.}"
+  else
+    DEV_PORTS_VALUE=""
+  fi
+}
+
+print_dev_checklist() {
+  local pat ports p
+  pat=$(env_get PROXY_DOMAIN); ports=$(env_get DEV_PORTS)
+  [ -n "$pat" ] || return 0
+  echo
+  explain "Dev app hostnames: add each of these in Cloudflare, once (Zero Trust > Networks > Tunnels >
+your tunnel > Public Hostname > Add): type HTTP, URL code-server:8443.
+$(for p in $ports; do echo "  ${pat//'{{port}}'/$p}"; done)
+Then add the same names to your Access application (list the exact names; do not use a wildcard
+that could also cover your other subdomains). Check what is still missing with: ./bootstrap.sh --check"
+}
+
+dev_host_status() { # "<http_code> <redirect_url>" -> ok | noaccess | missing
+  case "$1" in
+    30[1278]\ https://*.cloudflareaccess.com/*) echo ok ;;
+    401\ *) echo noaccess ;;
+    *) echo missing ;;
+  esac
+}
+
 write_env() {
-  explain "Two questions follow: the code-server password and the Cloudflare Tunnel token.
-Both are kept only in .env (mode 600) on this VM."
+  explain "A few questions follow: the code-server password, the Cloudflare Tunnel token and
+(optional) hostnames for dev apps. Everything is kept only in .env (mode 600) on this VM."
   ask_password
   ask_token
+  ask_dev_hosts
   local tz=${TZ:-}
   [ -n "$tz" ] || tz=$(timedatectl show -p Timezone --value 2>/dev/null || echo Europe/Berlin)
   umask 077
@@ -148,6 +254,9 @@ Both are kept only in .env (mode 600) on this VM."
       echo "COMPOSE_PROFILES="
       echo "TUNNEL_TOKEN="
     fi
+    echo "PROXY_DOMAIN='$DEV_PATTERN'"
+    echo "DEV_PORTS='$DEV_PORTS_VALUE'"
+    echo "DEV_ALLOWED_HOSTS='$DEV_ALLOWED_VALUE'"
     grep -E '^(CODE_SERVER|CLOUDFLARED)_VERSION=' .env.example
   } > .env.new
   mv .env.new .env
@@ -205,6 +314,19 @@ run_checks() { # read-only verification of the running stack
   else
     pass "no tunnel token configured (local-only)"
   fi
+  local dpat dports dp dh dans
+  dpat=$(env_get PROXY_DOMAIN); dports=$(env_get DEV_PORTS)
+  if [ -n "$dpat" ]; then
+    for dp in $dports; do
+      dh=${dpat//'{{port}}'/$dp}
+      dans=$(curl -s -o /dev/null -m 8 -w '%{http_code} %{redirect_url}' "https://$dh" || true)
+      case "$(dev_host_status "$dans")" in
+        ok) pass "$dh is set up and behind Cloudflare Access" ;;
+        noaccess) warn "$dh works but is NOT behind Access (code-server's cookie still protects it): add it to your Access application" ;;
+        *) warn "$dh is not set up in Cloudflare yet (answer: ${dans:-none}): add a Public Hostname to code-server:8443" ;;
+      esac
+    done
+  fi
   "${DOCKER[@]}" exec -u abc code-server curl -fsS -m 8 -o /dev/null https://github.com >/dev/null 2>&1 \
     && pass "container DNS and internet" || fail "container cannot reach github.com (DNS or egress)"
   "${DOCKER[@]}" exec -u abc code-server sh -c 'claude --version && gh --version && tmux -V && docker ps' >/dev/null 2>&1 \
@@ -219,6 +341,19 @@ run_checks() { # read-only verification of the running stack
 if [ "$MODE" = "--check" ]; then
   run_checks
   exit $?
+fi
+
+if [ "$MODE" = "--dev-hosts" ]; then
+  [ -f .env ] || die ".env not found: run ./bootstrap.sh first"
+  setup_docker_access
+  ask_dev_hosts
+  set_env PROXY_DOMAIN "'$DEV_PATTERN'"
+  set_env DEV_PORTS "'$DEV_PORTS_VALUE'"
+  set_env DEV_ALLOWED_HOSTS "'$DEV_ALLOWED_VALUE'"
+  info "Saved. Restarting code-server so the new hostnames take effect"
+  "${DOCKER[@]}" compose up -d
+  print_dev_checklist
+  exit 0
 fi
 
 # Pull first, then continue in the freshly pulled copy: otherwise this run would
@@ -246,6 +381,8 @@ fi
 info "Building and starting"
 "${DOCKER[@]}" compose up -d --build --remove-orphans
 "${DOCKER[@]}" compose ps
+
+print_dev_checklist
 
 if grep -q '^TUNNEL_TOKEN=.' .env; then
   echo "Tunnel enabled. Check: ${DOCKER[*]} compose logs --tail=30 cloudflared"

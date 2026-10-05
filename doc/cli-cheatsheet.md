@@ -99,6 +99,7 @@ vm$ ./bootstrap.sh                 # first run / re-run, keeps the password and 
 vm$ ./bootstrap.sh --reconfigure   # new code-server password and/or tunnel token
 vm$ ./bootstrap.sh --update        # pull, re-run the new script, refresh .env, rebuild, restart
 vm$ ./bootstrap.sh --check         # health check
+vm$ ./bootstrap.sh --dev-hosts     # change the domain/ports of the dev app hostnames
 vm$ DEV_PASSWORD=... TUNNEL_TOKEN=... ./bootstrap.sh   # non-interactive
 ```
 
@@ -257,7 +258,7 @@ Answers are remembered in `setup/setup.env` (git-ignored). See
 | `REMOTE HOST IDENTIFICATION HAS CHANGED` | rebuilt host or VM? | `ssh-keygen -R <name or IP>` |
 | `sudo: command not found` on a fresh Debian | root password was set at install | `su -`, `apt install -y sudo`, `usermod -aG sudo <user>`, log in again |
 | VM did not come back after a power cut | `virsh list --all`, `virsh dominfo devvm` | `virsh autostart devvm`; check the BIOS "Power On after AC loss" |
-| Vite shows `connect ECONNREFUSED 0.0.0.0:5173` through `/proxy/`, or a blank page | Vite listens on IPv6 only; absolute URLs lose the prefix | Set `server.host: '127.0.0.1'` and `base: '/absproxy/5173/'`, open `/absproxy/5173/` (README, "Developing in the browser") |
+| A dev app hostname (`5173-dev.<domain>`) shows 401, 503 or a Cloudflare error | `vm$ ./bootstrap.sh --check` | 401: log in at the IDE first; 503/530/no DNS: add the hostname in Cloudflare (Public Hostname, HTTP, `code-server:8443`) and to Access; app not listening: start it on any interface, `ECONNREFUSED` means nothing listens on that port |
 | tmux exits immediately in the container | `echo $SHELL` is `/bin/false` | Fixed by `/etc/tmux.conf` in the image; rebuild if missing |
 | `./bootstrap.sh` says permission denied on docker | group not active yet | Log in again, or use `sudo docker` |
 | Disk almost full | `df -h`, `docker system df` | Section 6, "Disk space" |
