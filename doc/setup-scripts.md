@@ -19,7 +19,7 @@ notebook-setup.sh  ──key──▶     host-setup.sh
                                 create-vm.sh  ──cloud-init──▶        user, key, updates, git clone
 ssh devvm 'cloud-init status --wait'                                 
 ssh devvm                                                            ./bootstrap.sh
-                                                                       (password, tunnel token)
+                                                                       (password, token, dev hostnames, database)
 verify-isolation.sh ─────────────────────────────────────────▶       checks
                                 create-vm.sh --finish                (removes the seed disk)
 ```
@@ -31,7 +31,7 @@ verify-isolation.sh ────────────────────
 | `setup/notebook-setup.sh` | notebook | Creates a dedicated passphrase-protected SSH key, adds the `devhost` and `devvm` aliases (IPv4 only, key only, VM through the host) to `~/.ssh/config` in a marked block, copies the key to the host. |
 | `setup/host-setup.sh` | host | Checks CPU virtualization, RAM and network; installs packages; console keyboard layout; automatic security updates; CPU microcode; SSH hardening; KVM/libvirt, the private VM network `devnet` and the storage pool `vmpool`; the firewall; start order and autostart; locks the root password; SMART health. |
 | `setup/create-vm.sh` | host | Downloads and verifies the Debian 13 cloud image, builds the VM disk and a cloud-init seed disk, reserves the VM's address, starts the VM with autostart. cloud-init creates your user, installs the key, makes SSH key-only, installs updates, git and unattended-upgrades and clones this repository. `--finish` removes the seed disk; `--remove --name N` deletes a test VM. |
-| `bootstrap.sh` | VM | Installs Docker, asks for the code-server password and the tunnel token (each prompt explains itself and rejects typical mistakes, such as the tunnel ID instead of the token), starts the stack. |
+| `bootstrap.sh` | VM | Installs Docker, asks for the code-server password, the tunnel token, an optional domain and ports for dev app hostnames and whether to run MariaDB (each prompt explains itself and rejects typical mistakes, such as the tunnel ID instead of the token), starts the stack. |
 | `setup/verify-isolation.sh` | VM (from the notebook) | Internet works; the router, the host's SSH, your LAN and IPv6 are blocked. |
 
 ## Questions you will be asked
@@ -53,8 +53,12 @@ verify-isolation.sh ────────────────────
 `sudo` and the emergency console; SSH never accepts it), a confirmation of the SSH
 keys that will be installed, the repository URL, time zone, RAM, cores, disk.
 
-`bootstrap.sh`: the code-server password (at least 12 characters) and the tunnel
-token (paste it, or Enter to skip and use `ssh -L` instead).
+`bootstrap.sh`: the code-server password (at least 12 characters); the tunnel
+token (paste it, or Enter to skip and use `ssh -L` instead); an optional domain and
+the ports for the dev app hostnames (default `5173 8000 5000 3000 4173 5174`); and
+whether to run MariaDB (default yes; passwords are generated). Non-interactive:
+`DEV_PASSWORD`, `TUNNEL_TOKEN`, `DEV_DOMAIN`, `DEV_PORTS` and `DEV_DB` environment
+variables. `--dev-hosts` and `--mariadb` change those two later.
 
 ## Safety design
 
@@ -79,6 +83,8 @@ token (paste it, or Enter to skip and use `ssh -L` instead).
   loss: Power On", and the router (the Fritzbox resolves `<hostname>.fritz.box`).
 - The Cloudflare tunnel, its public hostname and the Access policy (clicks in the
   dashboard; plan 2.1 and Phase 3). You copy the tunnel token into `bootstrap.sh`.
+- The Public Hostname and Access entry for each dev app port (plan 3.3); `bootstrap.sh`
+  prints the names and `--check` tells which are missing.
 - The GitHub fine-grained token and the Claude Code login (plan Phase 4).
 
 ## Tested and not tested
@@ -94,7 +100,10 @@ Tested during development, on a notebook without KVM:
   real tools.
 - The notebook script in a scratch home directory: idempotent, leaves other entries
   alone, `ssh -G` resolves the jump host.
-- The `bootstrap.sh` prompts through a real pseudo-terminal, with wrong and right input.
+- The `bootstrap.sh` prompts through a real pseudo-terminal, with wrong and right input,
+  and the whole script from a clean directory against real Docker: a fresh install,
+  `--check`, and `--mariadb` disable and re-enable. That run found and fixed a bug that
+  stopped fresh installs after the token prompt.
 
 **Not tested on real hardware** (needs `nft`, libvirt and the cloud image): applying the
 firewall with the rollback timer, `virt-install` with the cloud image and seed disk,

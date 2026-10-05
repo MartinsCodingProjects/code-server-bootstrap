@@ -3,13 +3,23 @@
 Browser-based dev environment for a personal Debian VM: **code-server** (VS Code
 in the browser) with Claude Code, GitHub CLI, tmux, Node.js, Python and Docker CLI,
 exposed through a **Cloudflare Tunnel** behind **Cloudflare Access** (GitHub
-login) and code-server's own password. Setup of the host and VM is described
-in [dev-server-plan.md](dev-server-plan.md); this repo is the part that runs
-inside the VM.
+login) and code-server's own password. Dev servers (Flask, FastAPI, Vite) open in
+the browser at hostnames of their own with **no changes to your projects**, and an
+optional MariaDB sits on a private network that only code-server can reach.
 
-This repository is public and contains no secrets. Passwords and the tunnel
-token are entered at bootstrap time and stored only in `.env` (mode 600,
-git-ignored). Claude Code is logged in interactively and `gh` with a
+This repository contains everything:
+
+- the container stack that runs inside the VM (`docker-compose.yml`, `Dockerfile`,
+  `bootstrap.sh`);
+- `setup/`, scripts that install the host and the VM from scratch;
+- the reasoning and the manual fallback: [dev-server-plan.md](dev-server-plan.md);
+- day-to-day commands and troubleshooting: [doc/cli-cheatsheet.md](doc/cli-cheatsheet.md);
+- how the setup scripts work and how to test them: [doc/setup-scripts.md](doc/setup-scripts.md).
+
+This repository is public and contains no secrets. The code-server password and
+the tunnel token are entered at bootstrap time, the database passwords are
+generated, and all of them are stored only in `.env` (mode 600, git-ignored) and,
+for the database's `dev` user, in `config/`. Claude Code is logged in interactively and `gh` with a
 fine-grained GitHub token (`gh auth login --with-token`, see Phase 4 of the plan)
 from the code-server terminal; credentials live in `./config`.
 
@@ -32,8 +42,9 @@ protocol: [doc/setup-scripts.md](doc/setup-scripts.md).
 
 Still by hand, because there is no API or it is physical: the Cloudflare tunnel,
 its public hostname and the Access policy (plan 2.1 and Phase 3; you paste the
-tunnel token into `bootstrap.sh`), the GitHub fine-grained token and the Claude
-login (plan Phase 4).
+tunnel token into `bootstrap.sh`), the Cloudflare hostnames and Access entries for
+the dev app ports (`bootstrap.sh` prints the list; see "Developing in the browser"),
+the GitHub fine-grained token and the Claude login (plan Phase 4).
 
 ## Quick start (container stack only; inside the VM, as a normal user with sudo)
 
@@ -43,20 +54,21 @@ cd ~/dev-server
 ./bootstrap.sh
 ```
 
-`bootstrap.sh` installs Docker Engine if missing, asks for a code-server
-password (min. 12 chars) and an optional Cloudflare Tunnel token, writes `.env`,
-then builds and starts the stack. Without a token only `127.0.0.1:8443` is
+`bootstrap.sh` installs Docker Engine if missing and asks, with an explanation
+before every question, for a code-server password (min. 12 chars), an optional
+Cloudflare Tunnel token, an optional domain and ports for the dev app hostnames,
+and whether to run MariaDB. It writes `.env`, then builds and starts the stack. Without a token only `127.0.0.1:8443` is
 served; reach it from your notebook with `ssh -L 8443:127.0.0.1:8443 devvm`.
 
 | Command | Purpose |
 |---|---|
 | `./bootstrap.sh` | First run or re-run; keeps an existing `.env` |
-| `./bootstrap.sh --reconfigure` | Ask for password and token again |
+| `./bootstrap.sh --reconfigure` | Ask everything again (password, token, dev hostnames, database); existing database passwords are kept |
 | `./bootstrap.sh --update` | `git pull`, re-run the pulled script, refresh host-derived values and pinned versions in `.env`, rebuild, restart |
 | `./bootstrap.sh --check` | Read-only health check of the running stack (non-zero exit on failure) |
 | `./bootstrap.sh --mariadb` | Enable or disable the dev database (generates passwords, writes the credentials file) |
 | `./bootstrap.sh --dev-hosts` | Change the domain and ports for the dev app hostnames, restart code-server, print the Cloudflare checklist |
-| `DEV_PASSWORD=... TUNNEL_TOKEN=... ./bootstrap.sh` | Non-interactive |
+| `DEV_PASSWORD=... TUNNEL_TOKEN=... DEV_DOMAIN=example.com DEV_PORTS='5173 8000' DEV_DB=yes ./bootstrap.sh` | Non-interactive (only the password is required) |
 
 ## Developing in the browser (Flask, FastAPI, Vite, React, ...)
 
@@ -98,7 +110,8 @@ IPv6 only, which the proxy cannot reach: `ECONNREFUSED 0.0.0.0:5173`);
 `patches/code-server-cookie-domain.js` fixes a code-server 4.140 bug that kept the login
 cookie on the IDE host. The build fails loudly if a new code-server version changes that
 code: check whether the bug is fixed upstream, then delete the patch and its two
-`Dockerfile` lines.
+`Dockerfile` lines. The settings live in `.env` as `PROXY_DOMAIN` (the pattern),
+`DEV_PORTS` and `DEV_ALLOWED_HOSTS`; `./bootstrap.sh --dev-hosts` edits them for you.
 
 Limits:
 
@@ -146,6 +159,10 @@ supervised `socat` forwarder), so a project connects exactly as it would on a la
   recreation, image updates and disabling the database; `docker compose down -v` deletes
   it. There are no backups (see the plan); dump what matters:
   `docker exec mariadb mariadb-dump -uroot -p --all-databases > dump.sql`.
+- `.env` keys: `DB_FORWARD` (`mariadb:3306` means enabled and starts the forwarder in
+  code-server; empty means off), `MARIADB_ROOT_PASSWORD` and `MARIADB_DEV_PASSWORD`
+  (generated once; they only apply when the data directory is created), and
+  `COMPOSE_PROFILES` (`db` and/or `tunnel`, kept in sync by `bootstrap.sh`).
 - The version is pinned (`MARIADB_VERSION`, an LTS line); a new major version is a
   deliberate bump, see "Updating". It uses roughly 150 MB of RAM.
 - Tested in the built image: use from code-server, the `dev_*` privilege limit, no access
@@ -159,7 +176,10 @@ supervised `socat` forwarder), so a project connects exactly as it would on a la
 | `setup/` | Scripts for a fresh install: notebook, host and VM creation, isolation check |
 | `Dockerfile` | code-server + Node.js, Python (venv, pip), Claude Code, `gh`, tmux, Docker CLI/Compose |
 | `docker-compose.yml` | `code-server`, `cloudflared` (profile `tunnel`) and `mariadb` (profile `db`) |
-| `.env.example` | Documents the variables `bootstrap.sh` writes |
+| `patches/` | Build-time workaround for a code-server cookie bug (fails the build if code-server changed) |
+| `docker/svc-db-forward/` | Supervised service that forwards `127.0.0.1:3306` in code-server to MariaDB |
+| `mariadb/initdb.d/` | First-start SQL for the database (the `dev_*` privileges) |
+| `.env.example` | Documents the variables `bootstrap.sh` writes (also the pinned versions) |
 | `config/` | code-server user data and logins (git-ignored) |
 | `projects/` | Your workspaces (git-ignored), mounted at the same absolute path inside the container |
 | `doc/cli-cheatsheet.md` | Commands for operating and maintaining the setup, plus troubleshooting |
@@ -176,7 +196,9 @@ ends running tmux sessions and Claude processes.
    like `4.140.0-ls368`) and `cloudflare/cloudflared` releases.
 2. **Bump the pins and commit** (from the notebook):
    - `CODE_SERVER_VERSION`: the `ARG` in `Dockerfile`, the default in
-     `docker-compose.yml`, and `.env.example`.
+     `docker-compose.yml`, and `.env.example`. The build may fail on purpose if the
+     cookie patch no longer matches the new code-server (see "Developing in the
+     browser"): check whether upstream fixed it, then drop the patch.
    - `CLOUDFLARED_VERSION`: the default in `docker-compose.yml` and `.env.example`.
    - `MARIADB_VERSION` (optional): `.env.example` and the default in `docker-compose.yml`;
      stay on an LTS line and read MariaDB's upgrade notes before a major jump.

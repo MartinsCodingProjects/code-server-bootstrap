@@ -101,7 +101,7 @@ vm$ ./bootstrap.sh --update        # pull, re-run the new script, refresh .env, 
 vm$ ./bootstrap.sh --check         # health check
 vm$ ./bootstrap.sh --dev-hosts     # change the domain/ports of the dev app hostnames
 vm$ ./bootstrap.sh --mariadb       # enable/disable the dev database
-vm$ DEV_PASSWORD=... TUNNEL_TOKEN=... ./bootstrap.sh   # non-interactive
+vm$ DEV_PASSWORD=... TUNNEL_TOKEN=... DEV_DOMAIN=example.com DEV_PORTS='5173 8000' DEV_DB=yes ./bootstrap.sh   # non-interactive
 ```
 
 ## 4. Inside code-server (`ct$`)
@@ -114,6 +114,15 @@ ct$ gh auth logout && gh auth login --with-token && gh auth setup-git   # rotate
 ct$ git config --global user.email "<id>+<login>@users.noreply.github.com"
 ct$ claude                         # Claude Code; login: copy the URL by hand, paste the code back
 ct$ docker ps                      # the VM's Docker, through the mounted socket
+```
+
+Dev servers (each in its own terminal tab or tmux window; open `https://<port>-dev.<domain>`):
+
+```bash
+ct$ uv init --python 3.13 && uv add fastapi uvicorn   # Python; uv downloads the version on first use
+ct$ uv run uvicorn app:app --reload --reload-dir backend   # FastAPI -> https://8000-dev.<domain>
+ct$ uv run flask run                                  # Flask -> https://5000-dev.<domain>
+ct$ npm run dev                                       # Vite -> https://5173-dev.<domain>
 ```
 
 Dev database (when enabled):
@@ -273,3 +282,7 @@ Answers are remembered in `setup/setup.env` (git-ignored). See
 | `./bootstrap.sh` says permission denied on docker | group not active yet | Log in again, or use `sudo docker` |
 | Disk almost full | `df -h`, `docker system df` | Section 6, "Disk space" |
 | Clock wrong, tunnel flaps | `timedatectl` | `sudo timedatectl set-ntp true` |
+| Database: "can't connect through socket" | the client was given `localhost` | Use `127.0.0.1` (README, "Dev database") |
+| Database not reachable at `127.0.0.1:3306` | `vm$ ./bootstrap.sh --check`, `docker compose ps` | Enable it with `./bootstrap.sh --mariadb`; `docker compose logs mariadb` for startup errors |
+| `pip install` says "externally managed environment" | no virtualenv | `uv add` / `uv pip install`, or `python -m venv .venv` |
+| A command typed after a dev server never runs | the server runs in the foreground | Open another terminal tab, or a tmux window (`Ctrl+b c`) |

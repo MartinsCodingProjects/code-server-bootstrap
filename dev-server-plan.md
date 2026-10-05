@@ -23,10 +23,14 @@ Notebook on LAN/WLAN
                           │     ├── Claude Code and GitHub CLI/auth
                           │     ├── tmux
                           │     └── Docker CLI + VM Docker socket
-                          └── cloudflared
-                                └── outbound Cloudflare Tunnel
+                          ├── cloudflared
+                          │     └── outbound Cloudflare Tunnel
+                          └── mariadb (optional)
+                                └── internal network shared only with code-server
+                                    (appears as 127.0.0.1:3306 inside code-server)
 
 Browser → Cloudflare Access → Tunnel → cloudflared → code-server
+Browser → <port>-dev.<domain> (Access) → Tunnel → code-server proxy → dev app on that port
 ```
 
 The physical host runs Debian and KVM/libvirt, but does not need Docker. The VM
@@ -44,6 +48,8 @@ the notebook, SSH to the host and manage the guest there (for example, with
 | Container runtime | Docker Engine + Compose, inside the VM | Projects can build and run their own containers without access to a host Docker daemon |
 | IDE + terminal | code-server (LinuxServer image) | Browser VS Code experience |
 | Dev database (optional) | MariaDB container on an internal network shared only with code-server | Projects get a real database without exposing it (README, "Dev database") |
+| Runtimes | Node.js 22 + npm, Python 3.12 + `uv` (other Python versions on demand) | Flask, FastAPI and Vite/React work without installing anything per project |
+| Dev apps in the browser | code-server's per-port proxy on hostnames `<port>-dev.<domain>` | Projects run unchanged on every device; no `base` path or host settings |
 | AI agent | Claude Code, installed in the code-server image | Available in the integrated terminal |
 | Session persistence | tmux | Keeps terminal processes alive across browser disconnects |
 | Remote access | Cloudflare Tunnel (`cloudflared`) | Outbound connection; no inbound router port forwarding |
@@ -88,9 +94,24 @@ the notebook, SSH to the host and manage the guest there (for example, with
 11. **Container setup is versioned in a public repo.** The Dockerfile, Compose
     file and `bootstrap.sh` live in this repository, which contains no secrets.
     The VM clones it and runs `./bootstrap.sh`, which installs Docker, asks for
-    the code-server password and optional tunnel token, writes a git-ignored
-    `.env` (mode 600), and starts the stack. Image versions are pinned in the
-    repo and bumped by commit.
+    the code-server password, an optional tunnel token, optional dev app
+    hostnames and an optional database, writes a git-ignored `.env` (mode 600),
+    and starts the stack. Image versions are pinned in the repo and bumped by
+    commit.
+12. **A repo must behave the same on every device.** Dev servers are served at
+    the root of per-port hostnames (`5173-dev.<domain>`), so no project file
+    needs a code-server specific setting. This costs a one-time Cloudflare entry
+    per port (explicit names, no wildcard if the domain hosts other sites), a
+    code-server environment (`PROXY_DOMAIN`, IPv4-first Node, Vite's allowed
+    hosts) and a build-time patch for a code-server cookie bug. A path prefix
+    (`/proxy/<port>/`) was rejected: it needs project changes.
+13. **The dev database is optional and isolated.** MariaDB runs in its own
+    container on an internal network shared only with code-server (no published
+    port, no route out); code-server sees it as `127.0.0.1:3306`, so connection
+    settings match a laptop.
+14. **Installation is scripted where it is safe to script.** `setup/` carries
+    out the host, VM and notebook steps (README, "Fresh install"); this plan
+    stays the explanation and the manual fallback.
 
 ## Security and Network Boundaries
 
@@ -544,8 +565,10 @@ vm$ cd ~/dev-server && ./bootstrap.sh
 
 The script installs Docker Engine (Debian repo from Docker), asks for the
 code-server password (min. 12 chars, typed twice) and the tunnel token (Enter to
-skip), writes `.env` with mode 600, then builds and starts code-server and, when
-a token was given, `cloudflared`. Re-run it any time; use `--reconfigure` to
+skip), then optionally a domain and ports for the dev app hostnames (3.3) and
+whether to run the MariaDB container. Every question is explained before it is
+asked. It writes `.env` with mode 600, then builds and starts code-server, the
+database if chosen and, when a token was given, `cloudflared`. Re-run it any time; use `--reconfigure` to
 change the password or token. Run the commands one at a time (the script prompts
 for input) and paste the token as a single line without any `cloudflared ...
 --token` prefix; the script rejects spaces. Until you log in again, the new
@@ -606,6 +629,16 @@ notebook$ curl -sI https://dev.yourdomain.com | head -n5   # redirect to *.cloud
 
 After the GitHub login you should see the code-server password prompt (second
 gate).
+
+**3.3 Dev app hostnames (optional, one-time per port)**
+
+For dev servers at `https://<port>-dev.<domain>` (README, "Developing in the
+browser"): `./bootstrap.sh` (or `--dev-hosts` later) asks for the domain and the
+ports and prints the names. For each one add a tunnel Public Hostname (type HTTP,
+URL `code-server:8443`) and add the **exact name** to your Access application; do
+not use a wildcard Access rule if the domain also hosts other sites. Without Access
+a name still answers 401 until you are logged in to the IDE, but Access is the first
+gate. `./bootstrap.sh --check` reports names that are missing or not behind Access.
 
 ### Phase 4: Authentication and workflow
 
@@ -738,7 +771,13 @@ the host reboot.
 - Rotate credentials on a schedule: the GitHub fine-grained token before it
   expires (90 days), and the code-server password or tunnel token when needed
   (`./bootstrap.sh --reconfigure`; a tunnel token can be refreshed in the
-  Cloudflare dashboard).
+  Cloudflare dashboard). The database passwords are generated once and only apply
+  when the data directory is created: to change one later, use `ALTER USER` inside
+  MariaDB, then update `.env` and `config/mariadb-credentials.txt`.
+- After every update run `./bootstrap.sh --check` (clock, Docker, compose, health,
+  tunnel, dev hostnames behind Access, database, container DNS, tools, disk).
+  Bumping code-server can make the build fail on purpose when the cookie patch no
+  longer applies; MariaDB major versions are a deliberate bump.
 
 ```bash
 # security updates: automatic (unattended-upgrades); check what happened
@@ -771,8 +810,9 @@ vm$ df -h / && docker system df
     token" invalidates the old one). Keep a copy of the notebook's
     `~/.ssh/id_ed25519_devhost`; it is not on the server.
   - **Lost:** anything in `projects/` that is not pushed to GitHub (uncommitted
-    changes, untracked files, local-only branches) and the code-server
-    settings, extensions and shell history in `config/`. Commit and push
+    changes, untracked files, local-only branches), the code-server
+    settings, extensions and shell history in `config/`, and the MariaDB data
+    (Docker volume `dev-server_mariadb-data`) unless you dumped it. Commit and push
     regularly (WIP branches are fine) and never keep the only copy of anything
     on the server.
   - Optional later: copy the VM disk (`/home/libvirt/images/`, VM shut down)
@@ -794,6 +834,13 @@ vm$ df -h / && docker system df
 - Claude Code and GitHub authentication work from the code-server terminal and
   survive a container recreation through the persistent user config.
 - A browser disconnect/reconnect preserves a tmux session.
+- With dev hostnames set up, a Vite and a FastAPI app started with their normal
+  commands open at `https://<port>-dev.<domain>` behind Cloudflare Access, answer
+  401 without a login, and need no project changes.
+- With the database enabled, code-server reaches it at `127.0.0.1:3306`; other
+  containers and the internet cannot, and its data survives recreating either
+  container.
+- `./bootstrap.sh --check` ends with `0 failed`.
 - After a power cut or host reboot with no intervention, the VM, Docker,
   code-server, and the tunnel all come back, the isolation rules are active,
   and the site is reachable through Cloudflare Access. Running tmux sessions and
@@ -805,4 +852,6 @@ SSH to the Debian host from the notebook only when VM administration is needed.
 For normal work, open `https://dev.yourdomain.com` from any device, authenticate
 through Cloudflare Access and code-server, attach to tmux, and work in the
 persistent VM environment. Projects can use Docker inside that VM without
-access to the physical host's Docker daemon.
+access to the physical host's Docker daemon. Start a dev server with its normal
+command and open it at `https://<port>-dev.<domain>`; a project that needs a
+database connects to `127.0.0.1:3306`, exactly as on a laptop.
