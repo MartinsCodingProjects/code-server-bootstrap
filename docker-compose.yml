@@ -32,6 +32,10 @@ services:
       PROXY_DOMAIN: ${PROXY_DOMAIN:-}
       NODE_OPTIONS: --dns-result-order=ipv4first
       __VITE_ADDITIONAL_SERVER_ALLOWED_HOSTS: ${DEV_ALLOWED_HOSTS:-}
+      DB_FORWARD: ${DB_FORWARD:-}
+    networks:
+      - default
+      - dbnet
     group_add:
       - "${DOCKER_GID}"
     security_opt:
@@ -50,6 +54,36 @@ services:
       timeout: 5s
       retries: 5
       start_period: 40s
+
+  # Optional dev database (profile "db"). No published ports, and it lives on its own
+  # internal network (no route out) shared only with code-server, which sees it as
+  # 127.0.0.1:3306 (DB_FORWARD). cloudflared cannot reach it.
+  mariadb:
+    image: mariadb:${MARIADB_VERSION:-11.8}
+    container_name: mariadb
+    restart: unless-stopped
+    profiles: ["db"]
+    logging: *default-logging
+    networks:
+      - dbnet
+    security_opt:
+      - no-new-privileges:true
+    command: --character-set-server=utf8mb4 --collation-server=utf8mb4_unicode_ci
+    environment:
+      MARIADB_ROOT_PASSWORD: ${MARIADB_ROOT_PASSWORD:-}
+      MARIADB_USER: dev
+      MARIADB_PASSWORD: ${MARIADB_DEV_PASSWORD:-}
+      MARIADB_DATABASE: dev
+      MARIADB_AUTO_UPGRADE: "1"
+    volumes:
+      - mariadb-data:/var/lib/mysql
+      - ./mariadb/initdb.d:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD", "healthcheck.sh", "--connect", "--innodb_initialized"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 60s
 
   cloudflared:
     image: cloudflare/cloudflared:${CLOUDFLARED_VERSION:-2026.9.3}
@@ -72,3 +106,10 @@ services:
     depends_on:
       code-server:
         condition: service_healthy
+
+networks:
+  dbnet:
+    internal: true
+
+volumes:
+  mariadb-data:

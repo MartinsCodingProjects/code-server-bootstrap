@@ -8,6 +8,7 @@
 #   ./bootstrap.sh --update       # git pull, rebuild, restart
 #   ./bootstrap.sh --check        # verify the running stack (read-only)
 #   ./bootstrap.sh --dev-hosts    # change the domain/ports for dev app hostnames
+#   ./bootstrap.sh --mariadb      # enable or disable the dev database
 #
 # Non-interactive: DEV_PASSWORD=... TUNNEL_TOKEN=... ./bootstrap.sh
 set -euo pipefail
@@ -20,7 +21,7 @@ die() { echo "ERROR: $*" >&2; exit 1; }
 info() { echo "==> $*"; }
 
 [ "$(id -u)" -ne 0 ] || die "run as your normal user (needs sudo), not as root"
-case "$MODE" in ""|--reconfigure|--update|--check|--dev-hosts) ;; *) die "unknown option: $MODE" ;; esac
+case "$MODE" in ""|--reconfigure|--update|--check|--dev-hosts|--mariadb) ;; *) die "unknown option: $MODE" ;; esac
 
 install_docker() {
   command -v docker >/dev/null 2>&1 && return
@@ -128,7 +129,10 @@ Add the token later with: ./bootstrap.sh --reconfigure"
 }
 
 
-env_get() { sed -n "s/^$1=//p" .env 2>/dev/null | tail -n1 | tr -d "'\""; }
+env_get() { # value of KEY in .env (empty if the file or key is missing; safe under pipefail)
+  [ -f .env ] || return 0
+  sed -n "s/^$1=//p" .env | tail -n1 | tr -d "'\""
+}
 
 DEFAULT_DEV_PORTS="5173 8000 5000 3000 4173 5174"
 
@@ -231,12 +235,77 @@ dev_host_status() { # "<http_code> <redirect_url>" -> ok | noaccess | missing
   esac
 }
 
+
+gen_secret() { head -c 48 /dev/urandom | base64 | tr -d '/+=\n' | cut -c1-24; }
+
+compute_profiles() { # compose profiles from .env: tunnel if a token is set, db if the database is on
+  local p=""
+  [ -z "$(env_get TUNNEL_TOKEN)" ] || p=tunnel
+  [ -z "$(env_get DB_FORWARD)" ] || p="${p:+$p,}db"
+  echo "$p"
+}
+
+# ask_database DEFAULT(y|n): sets DB_FORWARD_VALUE ("mariadb:3306" or ""), DB_ROOT_PW, DB_DEV_PW
+ask_database() {
+  local def=$1 ans
+  DB_ROOT_PW=$(env_get MARIADB_ROOT_PASSWORD); DB_DEV_PW=$(env_get MARIADB_DEV_PASSWORD)
+  if [ -n "${DEV_DB:-}" ]; then
+    ans=$DEV_DB
+  elif [ ! -t 0 ]; then
+    [ -z "$(env_get DB_FORWARD)" ] && ans=no || ans=yes
+  else
+    echo
+    explain "Dev database: MariaDB (optional)
+A MariaDB database for your projects, in its own container on a private network that only
+code-server can reach: no published port, no route to the internet, invisible to your LAN.
+Inside code-server it appears as 127.0.0.1:3306, so connection settings are the same as on a
+laptop. A 'dev' user may create databases named dev_<project>. The passwords are generated and
+saved in .env and, for the 'dev' user, in config/mariadb-credentials.txt. It needs about 150 MB of RAM.
+Enable or disable it later with: ./bootstrap.sh --mariadb"
+    read -rp "  Run MariaDB? [$def]: " ans
+    ans=${ans:-$def}
+  fi
+  case "${ans,,}" in
+    y|yes)
+      DB_FORWARD_VALUE="mariadb:3306"
+      [ -n "$DB_ROOT_PW" ] || DB_ROOT_PW=$(gen_secret)
+      [ -n "$DB_DEV_PW" ] || DB_DEV_PW=$(gen_secret)
+      ;;
+    *) DB_FORWARD_VALUE="" ;;
+  esac
+}
+
+write_db_credentials() {
+  local f=config/mariadb-credentials.txt
+  ( umask 077
+    cat > "$f" <<EOF
+MariaDB for dev projects (reachable only from code-server: no published port, no internet route)
+
+  host      127.0.0.1    use the IP, not "localhost": MySQL/MariaDB clients treat "localhost" as a unix socket
+  port      3306
+  user      dev
+  password  $(env_get MARIADB_DEV_PASSWORD)
+  databases dev, and any dev_<name>; create one per project:  CREATE DATABASE dev_myapp;
+
+Example (SQLAlchemy + PyMySQL):  mysql+pymysql://dev:$(env_get MARIADB_DEV_PASSWORD)@127.0.0.1:3306/dev_myapp
+
+Administration: the root password is MARIADB_ROOT_PASSWORD in ~/dev-server/.env on the VM; shell:
+  docker exec -it mariadb mariadb -uroot -p
+EOF
+  )
+}
+
+sync_db_credentials() {
+  if [ -n "$(env_get DB_FORWARD)" ]; then write_db_credentials; else rm -f config/mariadb-credentials.txt; fi
+}
+
 write_env() {
   explain "A few questions follow: the code-server password, the Cloudflare Tunnel token and
 (optional) hostnames for dev apps. Everything is kept only in .env (mode 600) on this VM."
   ask_password
   ask_token
   ask_dev_hosts
+  ask_database "$([ -f .env ] && [ -z "$(env_get DB_FORWARD)" ] && echo n || echo y)"
   local tz=${TZ:-}
   [ -n "$tz" ] || tz=$(timedatectl show -p Timezone --value 2>/dev/null || echo Europe/Berlin)
   umask 077
@@ -247,20 +316,22 @@ write_env() {
     echo "TZ=$tz"
     echo "PROJECTS_DIR=$REPO_DIR/projects"
     echo "PASSWORD='$PASSWORD_VALUE'"
-    if [ -n "$TOKEN_VALUE" ]; then
-      echo "COMPOSE_PROFILES=tunnel"
-      echo "TUNNEL_TOKEN=$TOKEN_VALUE"
-    else
-      echo "COMPOSE_PROFILES="
-      echo "TUNNEL_TOKEN="
-    fi
+    local profiles=""
+    [ -z "$TOKEN_VALUE" ] || profiles=tunnel
+    [ -z "$DB_FORWARD_VALUE" ] || profiles="${profiles:+$profiles,}db"
+    echo "COMPOSE_PROFILES=$profiles"
+    echo "TUNNEL_TOKEN=$TOKEN_VALUE"
+    echo "DB_FORWARD='$DB_FORWARD_VALUE'"
+    [ -z "$DB_ROOT_PW" ] || echo "MARIADB_ROOT_PASSWORD=$DB_ROOT_PW"
+    [ -z "$DB_DEV_PW" ] || echo "MARIADB_DEV_PASSWORD=$DB_DEV_PW"
     echo "PROXY_DOMAIN='$DEV_PATTERN'"
     echo "DEV_PORTS='$DEV_PORTS_VALUE'"
     echo "DEV_ALLOWED_HOSTS='$DEV_ALLOWED_VALUE'"
-    grep -E '^(CODE_SERVER|CLOUDFLARED)_VERSION=' .env.example
+    grep -E '^(CODE_SERVER|CLOUDFLARED|MARIADB)_VERSION=' .env.example
   } > .env.new
   mv .env.new .env
   chmod 600 .env
+  sync_db_credentials
   info "Wrote .env (mode 600)"
 }
 
@@ -276,7 +347,7 @@ sync_versions() {
   local line
   while IFS= read -r line; do
     set_env "${line%%=*}" "${line#*=}"
-  done < <(grep -E '^(CODE_SERVER|CLOUDFLARED)_VERSION=' .env.example)
+  done < <(grep -E '^(CODE_SERVER|CLOUDFLARED|MARIADB)_VERSION=' .env.example)
 }
 
 # Values derived from this host and clone can go stale after a restore or move
@@ -314,6 +385,12 @@ run_checks() { # read-only verification of the running stack
   else
     pass "no tunnel token configured (local-only)"
   fi
+  if [ -n "$(env_get DB_FORWARD)" ]; then
+    state=$("${DOCKER[@]}" inspect -f '{{.State.Health.Status}}' mariadb 2>/dev/null || true)
+    [ "$state" = healthy ] && pass "mariadb healthy" || fail "mariadb health: ${state:-not found}"
+    "${DOCKER[@]}" exec code-server timeout 3 bash -c '</dev/tcp/127.0.0.1/3306' >/dev/null 2>&1 \
+      && pass "database reachable from code-server at 127.0.0.1:3306" || fail "database not reachable from code-server at 127.0.0.1:3306"
+  fi
   local dpat dports dp dh dans
   dpat=$(env_get PROXY_DOMAIN); dports=$(env_get DEV_PORTS)
   if [ -n "$dpat" ]; then
@@ -341,6 +418,30 @@ run_checks() { # read-only verification of the running stack
 if [ "$MODE" = "--check" ]; then
   run_checks
   exit $?
+fi
+
+if [ "$MODE" = "--mariadb" ]; then
+  [ -f .env ] || die ".env not found: run ./bootstrap.sh first"
+  setup_docker_access
+  ask_database y
+  set_env DB_FORWARD "'$DB_FORWARD_VALUE'"
+  if [ -n "$DB_FORWARD_VALUE" ]; then
+    set_env MARIADB_ROOT_PASSWORD "$DB_ROOT_PW"
+    set_env MARIADB_DEV_PASSWORD "$DB_DEV_PW"
+  fi
+  set_env COMPOSE_PROFILES "$(compute_profiles)"
+  sync_db_credentials
+  if [ -n "$DB_FORWARD_VALUE" ]; then
+    info "Starting MariaDB and restarting code-server"
+    "${DOCKER[@]}" compose up -d
+    echo "Credentials for your projects: config/mariadb-credentials.txt (inside code-server: /config/mariadb-credentials.txt)"
+  else
+    info "Stopping MariaDB (its data volume is kept; enable it again to get the data back)"
+    "${DOCKER[@]}" compose --profile db stop mariadb || true
+    "${DOCKER[@]}" compose --profile db rm -f mariadb || true
+    "${DOCKER[@]}" compose up -d
+  fi
+  exit 0
 fi
 
 if [ "$MODE" = "--dev-hosts" ]; then

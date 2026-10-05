@@ -1,0 +1,8 @@
+#!/usr/bin/with-contenv bash
+# Forwards 127.0.0.1:3306 inside this container to the MariaDB container, so projects
+# connect to the database the same way as on a laptop. Only listens on loopback.
+# DB_FORWARD is "mariadb:3306" when the database is enabled, empty otherwise.
+if [[ -n "${DB_FORWARD:-}" ]]; then
+    exec socat TCP-LISTEN:3306,bind=127.0.0.1,fork,reuseaddr "TCP:${DB_FORWARD}"
+fi
+exec sleep infinity

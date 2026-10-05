@@ -11,7 +11,7 @@ FROM lscr.io/linuxserver/code-server:${CODE_SERVER_VERSION}
 ARG NODE_MAJOR=22
 
 RUN apt-get update \
- && apt-get install -y --no-install-recommends curl ca-certificates gnupg tmux git python3 python3-venv python3-pip \
+ && apt-get install -y --no-install-recommends curl ca-certificates gnupg tmux git socat python3 python3-venv python3-pip \
  && install -m 0755 -d /etc/apt/keyrings \
  && curl -fsSL https://deb.nodesource.com/gpgkey/nodesource-repo.gpg.key | gpg --dearmor -o /etc/apt/keyrings/nodesource.gpg \
  && echo "deb [signed-by=/etc/apt/keyrings/nodesource.gpg] https://deb.nodesource.com/node_${NODE_MAJOR}.x nodistro main" > /etc/apt/sources.list.d/nodesource.list \
@@ -29,6 +29,13 @@ RUN apt-get update \
 RUN echo 'set -g default-shell /bin/bash' > /etc/tmux.conf \
  && echo "alias terminal-w='tmux new -As work'" >> /etc/bash.bashrc \
  && echo 'unset VIRTUAL_ENV  # the base image points it at an empty /lsiopy; uv warns about it' >> /etc/bash.bashrc
+
+# Supervised service that forwards 127.0.0.1:3306 to the MariaDB container (if enabled).
+COPY docker/svc-db-forward /etc/s6-overlay/s6-rc.d/svc-db-forward
+RUN chmod 755 /etc/s6-overlay/s6-rc.d/svc-db-forward/run \
+ && mkdir -p /etc/s6-overlay/s6-rc.d/svc-db-forward/dependencies.d \
+ && touch /etc/s6-overlay/s6-rc.d/svc-db-forward/dependencies.d/init-services \
+ && touch /etc/s6-overlay/s6-rc.d/user/contents.d/svc-db-forward
 
 # Workaround for a code-server cookie bug with per-port hostnames (see the patch file).
 COPY patches/code-server-cookie-domain.js /tmp/code-server-cookie-domain.js

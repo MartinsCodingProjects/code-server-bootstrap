@@ -100,6 +100,7 @@ vm$ ./bootstrap.sh --reconfigure   # new code-server password and/or tunnel toke
 vm$ ./bootstrap.sh --update        # pull, re-run the new script, refresh .env, rebuild, restart
 vm$ ./bootstrap.sh --check         # health check
 vm$ ./bootstrap.sh --dev-hosts     # change the domain/ports of the dev app hostnames
+vm$ ./bootstrap.sh --mariadb       # enable/disable the dev database
 vm$ DEV_PASSWORD=... TUNNEL_TOKEN=... ./bootstrap.sh   # non-interactive
 ```
 
@@ -113,6 +114,15 @@ ct$ gh auth logout && gh auth login --with-token && gh auth setup-git   # rotate
 ct$ git config --global user.email "<id>+<login>@users.noreply.github.com"
 ct$ claude                         # Claude Code; login: copy the URL by hand, paste the code back
 ct$ docker ps                      # the VM's Docker, through the mounted socket
+```
+
+Dev database (when enabled):
+
+```bash
+vm$ docker exec -it mariadb mariadb -uroot -p          # root shell (password: MARIADB_ROOT_PASSWORD in ~/dev-server/.env)
+vm$ docker exec mariadb mariadb-dump -uroot -p --all-databases > ~/dump.sql
+vm$ docker compose logs --tail=30 mariadb
+ct$ cat /config/mariadb-credentials.txt                # host 127.0.0.1, user dev, password, example URL
 ```
 
 ## 5. The VM from the host (libvirt)

@@ -54,6 +54,7 @@ served; reach it from your notebook with `ssh -L 8443:127.0.0.1:8443 devvm`.
 | `./bootstrap.sh --reconfigure` | Ask for password and token again |
 | `./bootstrap.sh --update` | `git pull`, re-run the pulled script, refresh host-derived values and pinned versions in `.env`, rebuild, restart |
 | `./bootstrap.sh --check` | Read-only health check of the running stack (non-zero exit on failure) |
+| `./bootstrap.sh --mariadb` | Enable or disable the dev database (generates passwords, writes the credentials file) |
 | `./bootstrap.sh --dev-hosts` | Change the domain and ports for the dev app hostnames, restart code-server, print the Cloudflare checklist |
 | `DEV_PASSWORD=... TUNNEL_TOKEN=... ./bootstrap.sh` | Non-interactive |
 
@@ -83,7 +84,11 @@ container, exactly like `http://localhost:5173` would.
 
 **Every day:** log in to the IDE once, start your servers, open `https://<port>-dev.<domain>`.
 One login covers all of them (the cookie is scoped to the parent domain). Without it a
-hostname answers 401.
+hostname answers 401. A dev server runs in the foreground, so each one needs its own
+terminal (a second terminal tab, or a tmux window with `Ctrl+b c`); a command typed after
+`uvicorn ...` only runs once uvicorn stops. For uvicorn use `--reload --reload-dir <backend>`
+so the reloader does not watch `node_modules` and `.venv`. `ECONNREFUSED 0.0.0.0:<port>`
+simply means nothing listens on that port yet.
 
 What changes in the container to make that work (nothing in your projects):
 `PROXY_DOMAIN` makes code-server proxy `<port>-dev.<domain>` to that port;
@@ -101,10 +106,11 @@ Limits:
   for `/api` is the usual way). A hard-coded `http://localhost:8000` in browser code points
   at the *viewer's* machine and cannot work from any remote browser. A backend can also be
   opened directly at `https://8000-dev.<domain>`.
-- Tested in the container end to end (Vite and FastAPI at their hostnames, login cookie,
-  401 without it, hot-reload websocket upgrade) and with the feature turned off. Not tested:
-  real Cloudflare names and a browser session; clicking the link a dev server prints
-  (code-server rewrites it to the hostname pattern, expected but unverified).
+- Verified end to end in the container (Vite and FastAPI at their hostnames, login cookie,
+  401 without it, hot-reload websocket upgrade), with the feature turned off, and on the
+  real setup with Cloudflare (a FastAPI plus Vite/React proof of concept, and `--check`).
+  Not verified: clicking the link a dev server prints (code-server rewrites it to the
+  hostname pattern, expected but unconfirmed).
 - `__VITE_ADDITIONAL_SERVER_ALLOWED_HOSTS` is an internal Vite variable (tested with Vite
   8.3). Other dev servers with a host check (webpack-dev-server, Create React App, Next)
   may need their own setting.
@@ -120,13 +126,39 @@ Limits:
 - Docker-based projects: `docker compose` works through the mounted socket. Bind mounts
   resolve on the VM, so keep them under `projects/` (same path inside and out).
 
+## Dev database (MariaDB, optional)
+
+`./bootstrap.sh` asks whether to run MariaDB (answer later with `./bootstrap.sh --mariadb`).
+It is a separate container on its **own internal network** shared only with code-server:
+no published port, no route to the internet, unreachable from your LAN, the VM's other
+networks and `cloudflared`. Inside code-server it appears as **`127.0.0.1:3306`** (a
+supervised `socat` forwarder), so a project connects exactly as it would on a laptop.
+
+- A `dev` user may create and use databases named `dev_<project>` (and the default `dev`),
+  nothing else. Passwords are generated; the `dev` password is in
+  `/config/mariadb-credentials.txt` inside code-server, the root password only in
+  `~/dev-server/.env` on the VM. Admin shell: `docker exec -it mariadb mariadb -uroot -p`.
+- Connect with `127.0.0.1`, not `localhost`: MySQL/MariaDB clients treat `localhost` as a
+  unix socket. Example: `mysql+pymysql://dev:<password>@127.0.0.1:3306/dev_myapp`. Use a
+  pure-Python driver (PyMySQL, asyncmy, aiomysql); `mysqlclient` needs a compiler and
+  `-dev` libraries, which the image does not have.
+- Data lives in the Docker volume `dev-server_mariadb-data`. It survives restarts,
+  recreation, image updates and disabling the database; `docker compose down -v` deletes
+  it. There are no backups (see the plan); dump what matters:
+  `docker exec mariadb mariadb-dump -uroot -p --all-databases > dump.sql`.
+- The version is pinned (`MARIADB_VERSION`, an LTS line); a new major version is a
+  deliberate bump, see "Updating". It uses roughly 150 MB of RAM.
+- Tested in the built image: use from code-server, the `dev_*` privilege limit, no access
+  from other containers, no route out, persistence across recreating either container,
+  and the forwarder returning by itself after code-server is recreated.
+
 ## Layout
 
 | Path | Purpose |
 |---|---|
 | `setup/` | Scripts for a fresh install: notebook, host and VM creation, isolation check |
 | `Dockerfile` | code-server + Node.js, Python (venv, pip), Claude Code, `gh`, tmux, Docker CLI/Compose |
-| `docker-compose.yml` | `code-server` and `cloudflared` (profile `tunnel`) |
+| `docker-compose.yml` | `code-server`, `cloudflared` (profile `tunnel`) and `mariadb` (profile `db`) |
 | `.env.example` | Documents the variables `bootstrap.sh` writes |
 | `config/` | code-server user data and logins (git-ignored) |
 | `projects/` | Your workspaces (git-ignored), mounted at the same absolute path inside the container |
@@ -146,6 +178,8 @@ ends running tmux sessions and Claude processes.
    - `CODE_SERVER_VERSION`: the `ARG` in `Dockerfile`, the default in
      `docker-compose.yml`, and `.env.example`.
    - `CLOUDFLARED_VERSION`: the default in `docker-compose.yml` and `.env.example`.
+   - `MARIADB_VERSION` (optional): `.env.example` and the default in `docker-compose.yml`;
+     stay on an LTS line and read MariaDB's upgrade notes before a major jump.
    - `DOCKER_CLI_VERSION` and `UV_VERSION` (optional): the `ARG`s in `Dockerfile`;
      the tags are `docker:<version>-cli` and `ghcr.io/astral-sh/uv:<version>`.
 3. **Apply on the VM:** `cd ~/dev-server && ./bootstrap.sh --update`. It pulls,

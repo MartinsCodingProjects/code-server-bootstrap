@@ -43,6 +43,7 @@ the notebook, SSH to the host and manage the guest there (for example, with
 | Guest OS | Debian 13 minimal | All development services and project workloads stay inside the VM |
 | Container runtime | Docker Engine + Compose, inside the VM | Projects can build and run their own containers without access to a host Docker daemon |
 | IDE + terminal | code-server (LinuxServer image) | Browser VS Code experience |
+| Dev database (optional) | MariaDB container on an internal network shared only with code-server | Projects get a real database without exposing it (README, "Dev database") |
 | AI agent | Claude Code, installed in the code-server image | Available in the integrated terminal |
 | Session persistence | tmux | Keeps terminal processes alive across browser disconnects |
 | Remote access | Cloudflare Tunnel (`cloudflared`) | Outbound connection; no inbound router port forwarding |
