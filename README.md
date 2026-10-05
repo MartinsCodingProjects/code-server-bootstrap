@@ -73,6 +73,14 @@ per project:
   build absolute URLs may need a base-path setting when served under a path prefix
   (Vite `base`, uvicorn `--root-path`); `https://<your-ide-host>/absproxy/<port>/`
   keeps the prefix for apps configured that way.
+- Python: the system Python is 3.12 and `pip install` outside a virtualenv is refused
+  (by design). Use `uv` (included): `uv init`, `uv add fastapi uvicorn alembic
+  argon2-cffi`, `uv run uvicorn app:app --host 0.0.0.0 --port 8000`. Other versions,
+  e.g. 3.13, are downloaded on first use (`uv python install 3.13`, or
+  `uv init --python 3.13`, or a `.python-version` file) and kept in `./config`
+  (`HOME` is `/config`), so they survive container recreation. No pyenv: it compiles
+  Python from source and would need a compiler and many `-dev` libraries.
+  Tested with Python 3.13, FastAPI, Alembic and argon2-cffi.
 - Docker-based projects: `docker compose` works through the mounted socket. Bind
   mounts resolve on the VM, so keep them under `projects/` (same path inside and
   out).
@@ -103,8 +111,8 @@ ends running tmux sessions and Claude processes.
    - `CODE_SERVER_VERSION`: the `ARG` in `Dockerfile`, the default in
      `docker-compose.yml`, and `.env.example`.
    - `CLOUDFLARED_VERSION`: the default in `docker-compose.yml` and `.env.example`.
-   - `DOCKER_CLI_VERSION` (optional): the `ARG` in `Dockerfile`; the tag is
-     `docker:<version>-cli`.
+   - `DOCKER_CLI_VERSION` and `UV_VERSION` (optional): the `ARG`s in `Dockerfile`;
+     the tags are `docker:<version>-cli` and `ghcr.io/astral-sh/uv:<version>`.
 3. **Apply on the VM:** `cd ~/dev-server && ./bootstrap.sh --update`. It pulls,
    continues in the freshly pulled script, refreshes `PUID`, `PGID`, `DOCKER_GID`,
    `PROJECTS_DIR` and the pinned versions in `.env` (Compose prefers `.env`;

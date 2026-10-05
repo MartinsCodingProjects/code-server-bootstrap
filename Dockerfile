@@ -1,7 +1,10 @@
 ARG CODE_SERVER_VERSION=4.140.0-ls368
 ARG DOCKER_CLI_VERSION=29.8.2
+ARG UV_VERSION=0.12.23
 
 FROM docker:${DOCKER_CLI_VERSION}-cli AS dockercli
+
+FROM ghcr.io/astral-sh/uv:${UV_VERSION} AS uv
 
 FROM lscr.io/linuxserver/code-server:${CODE_SERVER_VERSION}
 
@@ -24,7 +27,12 @@ RUN apt-get update \
 # creates) the persistent "work" session; it is an alias, not an automatic
 # attach, so each terminal tab stays independent unless you run it.
 RUN echo 'set -g default-shell /bin/bash' > /etc/tmux.conf \
- && echo "alias terminal-w='tmux new -As work'" >> /etc/bash.bashrc
+ && echo "alias terminal-w='tmux new -As work'" >> /etc/bash.bashrc \
+ && echo 'unset VIRTUAL_ENV  # the base image points it at an empty /lsiopy; uv warns about it' >> /etc/bash.bashrc
+
+# uv: Python package, virtualenv and interpreter manager. It downloads prebuilt Python
+# versions on demand (into /config, which persists), so no compiler is needed.
+COPY --from=uv /uv /uvx /usr/local/bin/
 
 # Docker CLI + Compose talk to the VM's Docker daemon through the mounted socket.
 COPY --from=dockercli /usr/local/bin/docker /usr/local/bin/docker
