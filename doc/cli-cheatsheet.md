@@ -257,6 +257,7 @@ Answers are remembered in `setup/setup.env` (git-ignored). See
 | `REMOTE HOST IDENTIFICATION HAS CHANGED` | rebuilt host or VM? | `ssh-keygen -R <name or IP>` |
 | `sudo: command not found` on a fresh Debian | root password was set at install | `su -`, `apt install -y sudo`, `usermod -aG sudo <user>`, log in again |
 | VM did not come back after a power cut | `virsh list --all`, `virsh dominfo devvm` | `virsh autostart devvm`; check the BIOS "Power On after AC loss" |
+| Vite shows `connect ECONNREFUSED 0.0.0.0:5173` through `/proxy/`, or a blank page | Vite listens on IPv6 only; absolute URLs lose the prefix | Set `server.host: '127.0.0.1'` and `base: '/absproxy/5173/'`, open `/absproxy/5173/` (README, "Developing in the browser") |
 | tmux exits immediately in the container | `echo $SHELL` is `/bin/false` | Fixed by `/etc/tmux.conf` in the image; rebuild if missing |
 | `./bootstrap.sh` says permission denied on docker | group not active yet | Log in again, or use `sudo docker` |
 | Disk almost full | `df -h`, `docker system df` | Section 6, "Disk space" |

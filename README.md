@@ -69,10 +69,8 @@ per project:
   two gates as the IDE (Cloudflare Access, then the code-server password).
 - Addresses with an internal IP that a server prints (like `http://172.18.0.2:5000`)
   do not work from your browser; use the `127.0.0.1` link or the `/proxy/` URL.
-- Tested: a Flask hello-world app. Not tested: Vite, React and FastAPI. Apps that
-  build absolute URLs may need a base-path setting when served under a path prefix
-  (Vite `base`, uvicorn `--root-path`); `https://<your-ide-host>/absproxy/<port>/`
-  keeps the prefix for apps configured that way.
+- Flask works as it is (it listens on IPv4 `127.0.0.1`). **Vite does not**, see the
+  recipe below. FastAPI listens on IPv4 and needs nothing special.
 - Python: the system Python is 3.12 and `pip install` outside a virtualenv is refused
   (by design). Use `uv` (included): `uv init`, `uv add fastapi uvicorn alembic
   argon2-cffi`, `uv run uvicorn app:app --host 0.0.0.0 --port 8000`. Other versions,
@@ -81,6 +79,44 @@ per project:
   (`HOME` is `/config`), so they survive container recreation. No pyenv: it compiles
   Python from source and would need a compiler and many `-dev` libraries.
   Tested with Python 3.13, FastAPI, Alembic and argon2-cffi.
+- **Vite/React with a FastAPI backend (tested end to end in the container).** Two
+  things go wrong with Vite's defaults:
+  1. Vite listens on IPv6 `::1` only, but the proxy connects over IPv4, which shows
+     the error `connect ECONNREFUSED 0.0.0.0:5173`. Fix: `server.host: '127.0.0.1'`.
+  2. `/proxy/<port>/` strips the path prefix, so the page's absolute URLs
+     (`/@vite/client`, `/src/main.tsx`) hit code-server and return 404 (blank page).
+     Fix: serve Vite under `/absproxy/<port>/`, which keeps the prefix, and tell
+     Vite with `base`. Open `https://<your-ide-host>/absproxy/5173/` directly.
+
+  `vite.config.ts` (the base only in dev, so production builds are unaffected):
+
+  ```ts
+  export default defineConfig(({ command }) => ({
+    plugins: [react()],
+    base: command === 'serve' ? '/absproxy/5173/' : '/',
+    server: {
+      host: '127.0.0.1',            // IPv4, so the proxy can connect
+      port: 5173,
+      strictPort: true,
+      hmr: { clientPort: 443 },     // hot reload websocket through https
+      proxy: {                      // the API on the same origin; the prefix is the dev base
+        '/absproxy/5173/api': {
+          target: 'http://127.0.0.1:8000',
+          rewrite: (p) => p.replace('/absproxy/5173', ''),
+        },
+      },
+    },
+  }))
+  ```
+
+  In the frontend call the API relative to the base, not with a leading slash:
+  `fetch(`${import.meta.env.BASE_URL}api/ping`)`. A plain `fetch('/api/ping')` goes to
+  code-server and returns 404. Start the backend on IPv4:
+  `uv run uvicorn app:app --host 127.0.0.1 --port 8000` (no `root_path` needed: Vite
+  strips the prefix before the request reaches FastAPI). Verified: page, assets, the
+  API call through Vite and the hot-reload websocket upgrade (HTTP 101) through the
+  proxy. Not verified: clicking the link Vite prints in the terminal (use the
+  `/absproxy/` URL above).
 - Docker-based projects: `docker compose` works through the mounted socket. Bind
   mounts resolve on the VM, so keep them under `projects/` (same path inside and
   out).
