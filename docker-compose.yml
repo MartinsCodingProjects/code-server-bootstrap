@@ -38,6 +38,8 @@ services:
       - dbnet
     group_add:
       - "${DOCKER_GID}"
+    # Headless Chromium (Playwright) crashes on large pages with Docker's 64 MB default.
+    shm_size: 1gb
     security_opt:
       - no-new-privileges:true
     volumes:

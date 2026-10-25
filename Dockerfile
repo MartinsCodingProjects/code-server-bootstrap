@@ -9,9 +9,14 @@ FROM ghcr.io/astral-sh/uv:${UV_VERSION} AS uv
 FROM lscr.io/linuxserver/code-server:${CODE_SERVER_VERSION}
 
 ARG NODE_MAJOR=22
+# Playwright: only the system libraries are installed here (the browsers themselves are
+# downloaded per project by `npx playwright install` into /config, which persists).
+# "chromium firefox webkit" covers all three at roughly 400 MB more.
+ARG PLAYWRIGHT_VERSION=1.52.0
+ARG PLAYWRIGHT_BROWSERS=chromium
 
 RUN apt-get update \
- && apt-get install -y --no-install-recommends curl ca-certificates gnupg tmux git socat python3 python3-venv python3-pip \
+ && apt-get install -y --no-install-recommends curl ca-certificates gnupg tmux git socat make openjdk-17-jdk-headless python3 python3-venv python3-pip \
  && install -m 0755 -d /etc/apt/keyrings \
  && curl -fsSL https://deb.nodesource.com/gpgkey/nodesource-repo.gpg.key | gpg --dearmor -o /etc/apt/keyrings/nodesource.gpg \
  && echo "deb [signed-by=/etc/apt/keyrings/nodesource.gpg] https://deb.nodesource.com/node_${NODE_MAJOR}.x nodistro main" > /etc/apt/sources.list.d/nodesource.list \
@@ -20,7 +25,13 @@ RUN apt-get update \
  && apt-get update \
  && apt-get install -y --no-install-recommends nodejs gh \
  && npm install -g @anthropic-ai/claude-code \
+ && npx -y playwright@${PLAYWRIGHT_VERSION} install-deps ${PLAYWRIGHT_BROWSERS} \
+ && rm -rf /root/.npm \
  && apt-get clean && rm -rf /var/lib/apt/lists/*
+
+# Tools installed without root (pipx, fnm, binaries) go to ~/.local/bin; HOME is /config,
+# so they survive rebuilds and are on PATH for every process, agents included.
+ENV PATH=/config/.local/bin:$PATH
 
 # The abc user's login shell is /bin/false, which tmux would use for new windows
 # and exit immediately; point tmux at bash instead. `terminal-w` attaches to (or
@@ -28,7 +39,8 @@ RUN apt-get update \
 # attach, so each terminal tab stays independent unless you run it.
 RUN echo 'set -g default-shell /bin/bash' > /etc/tmux.conf \
  && echo "alias terminal-w='tmux new -As work'" >> /etc/bash.bashrc \
- && echo 'unset VIRTUAL_ENV  # the base image points it at an empty /lsiopy; uv warns about it' >> /etc/bash.bashrc
+ && echo 'unset VIRTUAL_ENV  # the base image points it at an empty /lsiopy; uv warns about it' >> /etc/bash.bashrc \
+ && echo 'command -v fnm >/dev/null && eval "$(fnm env --use-on-cd --shell bash)"  # per-project Node (.nvmrc) if fnm is installed' >> /etc/bash.bashrc
 
 # Supervised service that forwards 127.0.0.1:3306 to the MariaDB container (if enabled).
 COPY docker/svc-db-forward /etc/s6-overlay/s6-rc.d/svc-db-forward

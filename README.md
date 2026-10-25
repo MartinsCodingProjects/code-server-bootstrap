@@ -73,7 +73,12 @@ served; reach it from your notebook with `ssh -L 8443:127.0.0.1:8443 devvm`.
 ## Developing in the browser (Flask, FastAPI, Vite, React, ...)
 
 The container has Node.js 22 with npm, Python 3.12 with `venv`, `pip` and `uv`, git,
-`gh`, tmux, the Docker CLI and Claude Code. Keep projects under `projects/`.
+`gh`, tmux, `make`, OpenJDK 17, the Docker CLI, Claude Code and the system libraries for
+Playwright's Chromium. Keep projects under `projects/`. There is no root (`sudo` asks for a
+password that is not set): tools you install yourself go to `~/.local/bin` (`/config/.local/bin`),
+which persists and is on `PATH` for every process, Claude sessions included. If
+[fnm](https://github.com/Schniz/fnm) is installed there, shells pick the Node version from a
+project's `.nvmrc`/`.node-version`.
 
 **The goal: a repo behaves the same on your laptop and in code-server.** Clone it,
 start the dev server with its normal command (`npm run dev`, `uvicorn app:app`,
@@ -136,6 +141,12 @@ Limits:
   `-dev` libraries. Tested with Python 3.13, FastAPI, Alembic and argon2-cffi.
 - Without the hostnames (feature off), code-server's own path proxy `https://<ide-host>/proxy/<port>/`
   still works for apps that listen on IPv4, such as Flask.
+- Playwright: `npx playwright install chromium` (no `--with-deps`, the libraries are in the
+  image) downloads the browser into `/config/.cache`, then `npx playwright test` runs
+  headless. Firefox and WebKit need more libraries: build with
+  `PLAYWRIGHT_BROWSERS="chromium firefox webkit"` (Dockerfile `ARG`, about 400 MB more).
+  Tested as the `abc` user with Playwright 1.64. Headed mode needs a display and does not
+  work; use screenshots, traces or the HTML report instead.
 - Docker-based projects: `docker compose` works through the mounted socket. Bind mounts
   resolve on the VM, so keep them under `projects/` (same path inside and out).
 
@@ -174,7 +185,7 @@ supervised `socat` forwarder), so a project connects exactly as it would on a la
 | Path | Purpose |
 |---|---|
 | `setup/` | Scripts for a fresh install: notebook, host and VM creation, isolation check |
-| `Dockerfile` | code-server + Node.js, Python (venv, pip), Claude Code, `gh`, tmux, Docker CLI/Compose |
+| `Dockerfile` | code-server + Node.js, Python (venv, pip, uv), Claude Code, `gh`, tmux, `make`, JDK 17, Playwright libraries, Docker CLI/Compose |
 | `docker-compose.yml` | `code-server`, `cloudflared` (profile `tunnel`) and `mariadb` (profile `db`) |
 | `patches/` | Build-time workaround for a code-server cookie bug (fails the build if code-server changed) |
 | `docker/svc-db-forward/` | Supervised service that forwards `127.0.0.1:3306` in code-server to MariaDB |
@@ -204,6 +215,9 @@ ends running tmux sessions and Claude processes.
      stay on an LTS line and read MariaDB's upgrade notes before a major jump.
    - `DOCKER_CLI_VERSION` and `UV_VERSION` (optional): the `ARG`s in `Dockerfile`;
      the tags are `docker:<version>-cli` and `ghcr.io/astral-sh/uv:<version>`.
+   - `PLAYWRIGHT_VERSION` (optional): the `ARG` in `Dockerfile`; it only decides which
+     system libraries `playwright install-deps` adds. Bump it if a project's newer
+     Playwright reports missing libraries.
 3. **Apply on the VM:** `cd ~/dev-server && ./bootstrap.sh --update`. It pulls,
    continues in the freshly pulled script, refreshes `PUID`, `PGID`, `DOCKER_GID`,
    `PROJECTS_DIR` and the pinned versions in `.env` (Compose prefers `.env`;
