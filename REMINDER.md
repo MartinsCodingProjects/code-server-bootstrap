@@ -1,5 +1,9 @@
 # Issues while Testing:
 
+**Status 2026-10-25:** both resolved, see the README ("Developing in the browser").
+- Node: the image now has Node 24; other versions via `fnm` (included, reads `.nvmrc`), not nvm.
+- Python 3.13: `uv python install 3.13` or a `.python-version` file; `uv run` then uses it.
+
 ## NVM and NVM-Version
 - it says nvm version 22.23.33 in the current setup. I need nvm 24
 - Had Isses installing/checking nvm from a working project:

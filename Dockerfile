@@ -1,6 +1,7 @@
 ARG CODE_SERVER_VERSION=4.140.0-ls368
 ARG DOCKER_CLI_VERSION=29.8.2
 ARG UV_VERSION=0.12.23
+ARG FNM_VERSION=1.38.1
 
 FROM docker:${DOCKER_CLI_VERSION}-cli AS dockercli
 
@@ -8,7 +9,8 @@ FROM ghcr.io/astral-sh/uv:${UV_VERSION} AS uv
 
 FROM lscr.io/linuxserver/code-server:${CODE_SERVER_VERSION}
 
-ARG NODE_MAJOR=22
+ARG NODE_MAJOR=24
+ARG FNM_VERSION
 # Playwright: only the system libraries are installed here (the browsers themselves are
 # downloaded per project by `npx playwright install` into /config, which persists).
 # "chromium firefox webkit" covers all three at roughly 400 MB more.
@@ -29,7 +31,13 @@ RUN apt-get update \
  && rm -rf /root/.npm \
  && apt-get clean && rm -rf /var/lib/apt/lists/*
 
-# Tools installed without root (pipx, fnm, binaries) go to ~/.local/bin; HOME is /config,
+# fnm: per-project Node versions (.nvmrc, .node-version) next to the image's default
+# Node; versions it installs live in /config and persist. Hooked into bash below.
+RUN curl -fsSL https://github.com/Schniz/fnm/releases/download/v${FNM_VERSION}/fnm-linux.zip -o /tmp/fnm.zip \
+ && python3 -c 'import zipfile; zipfile.ZipFile("/tmp/fnm.zip").extract("fnm", "/usr/local/bin")' \
+ && chmod 755 /usr/local/bin/fnm && rm /tmp/fnm.zip
+
+# Tools installed without root (pipx, binaries) go to ~/.local/bin; HOME is /config,
 # so they survive rebuilds and are on PATH for every process, agents included.
 ENV PATH=/config/.local/bin:$PATH
 
@@ -40,7 +48,8 @@ ENV PATH=/config/.local/bin:$PATH
 RUN echo 'set -g default-shell /bin/bash' > /etc/tmux.conf \
  && echo "alias terminal-w='tmux new -As work'" >> /etc/bash.bashrc \
  && echo 'unset VIRTUAL_ENV  # the base image points it at an empty /lsiopy; uv warns about it' >> /etc/bash.bashrc \
- && echo 'command -v fnm >/dev/null && eval "$(fnm env --use-on-cd --shell bash)"  # per-project Node (.nvmrc) if fnm is installed' >> /etc/bash.bashrc
+ && echo '# fnm: per-project Node (.nvmrc, .node-version); elsewhere the image Node, not the first one fnm installed' >> /etc/bash.bashrc \
+ && echo 'eval "$(fnm env --use-on-cd --shell bash)"; [ -e .nvmrc ] || [ -e .node-version ] || fnm use system >/dev/null' >> /etc/bash.bashrc
 
 # Supervised service that forwards 127.0.0.1:3306 to the MariaDB container (if enabled).
 COPY docker/svc-db-forward /etc/s6-overlay/s6-rc.d/svc-db-forward

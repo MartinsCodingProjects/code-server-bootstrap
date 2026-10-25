@@ -72,13 +72,18 @@ served; reach it from your notebook with `ssh -L 8443:127.0.0.1:8443 devvm`.
 
 ## Developing in the browser (Flask, FastAPI, Vite, React, ...)
 
-The container has Node.js 22 with npm, Python 3.12 with `venv`, `pip` and `uv`, git,
+The container has Node.js 24 (LTS) with npm, Python 3.12 with `venv`, `pip` and `uv`, git,
 `gh`, tmux, `make`, OpenJDK 17, the Docker CLI, Claude Code and the system libraries for
 Playwright's Chromium. Keep projects under `projects/`. There is no root (`sudo` asks for a
 password that is not set): tools you install yourself go to `~/.local/bin` (`/config/.local/bin`),
-which persists and is on `PATH` for every process, Claude sessions included. If
-[fnm](https://github.com/Schniz/fnm) is installed there, shells pick the Node version from a
-project's `.nvmrc`/`.node-version`.
+which persists and is on `PATH` for every process, Claude sessions included.
+
+Other Node versions: [fnm](https://github.com/Schniz/fnm) is included. In a project with a
+`.nvmrc` or `.node-version`, run `fnm install` once; from then on a shell switches to that
+version when you `cd` into the directory (or open a terminal there). Everywhere else a new
+shell uses the image's Node 24. Leaving the directory keeps the version until the next
+project or a new terminal (`fnm use system` switches back by hand). Versions live in
+`/config` and survive rebuilds. There is no `nvm`; `fnm` reads the same files.
 
 **The goal: a repo behaves the same on your laptop and in code-server.** Clone it,
 start the dev server with its normal command (`npm run dev`, `uvicorn app:app`,
@@ -185,7 +190,7 @@ supervised `socat` forwarder), so a project connects exactly as it would on a la
 | Path | Purpose |
 |---|---|
 | `setup/` | Scripts for a fresh install: notebook, host and VM creation, isolation check |
-| `Dockerfile` | code-server + Node.js, Python (venv, pip, uv), Claude Code, `gh`, tmux, `make`, JDK 17, Playwright libraries, Docker CLI/Compose |
+| `Dockerfile` | code-server + Node.js 24 and fnm, Python (venv, pip, uv), Claude Code, `gh`, tmux, `make`, JDK 17, Playwright libraries, Docker CLI/Compose |
 | `docker-compose.yml` | `code-server`, `cloudflared` (profile `tunnel`) and `mariadb` (profile `db`) |
 | `patches/` | Build-time workaround for a code-server cookie bug (fails the build if code-server changed) |
 | `docker/svc-db-forward/` | Supervised service that forwards `127.0.0.1:3306` in code-server to MariaDB |
@@ -213,8 +218,11 @@ ends running tmux sessions and Claude processes.
    - `CLOUDFLARED_VERSION`: the default in `docker-compose.yml` and `.env.example`.
    - `MARIADB_VERSION` (optional): `.env.example` and the default in `docker-compose.yml`;
      stay on an LTS line and read MariaDB's upgrade notes before a major jump.
-   - `DOCKER_CLI_VERSION` and `UV_VERSION` (optional): the `ARG`s in `Dockerfile`;
-     the tags are `docker:<version>-cli` and `ghcr.io/astral-sh/uv:<version>`.
+   - `DOCKER_CLI_VERSION`, `UV_VERSION` and `FNM_VERSION` (optional): the `ARG`s in
+     `Dockerfile`; the tags are `docker:<version>-cli`, `ghcr.io/astral-sh/uv:<version>`
+     and fnm's GitHub releases.
+   - `NODE_MAJOR` (the image's Node): the `ARG` in `Dockerfile`; move to the next even
+     major once it is LTS (Node 26 from late October 2026).
    - `PLAYWRIGHT_VERSION` (optional): the `ARG` in `Dockerfile`; it only decides which
      system libraries `playwright install-deps` adds. Bump it if a project's newer
      Playwright reports missing libraries.

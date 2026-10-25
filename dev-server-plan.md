@@ -48,7 +48,7 @@ the notebook, SSH to the host and manage the guest there (for example, with
 | Container runtime | Docker Engine + Compose, inside the VM | Projects can build and run their own containers without access to a host Docker daemon |
 | IDE + terminal | code-server (LinuxServer image) | Browser VS Code experience |
 | Dev database (optional) | MariaDB container on an internal network shared only with code-server | Projects get a real database without exposing it (README, "Dev database") |
-| Runtimes | Node.js 22 + npm, Python 3.12 + `uv` (other Python versions on demand) | Flask, FastAPI and Vite/React work without installing anything per project |
+| Runtimes | Node.js 24 + npm (other versions via `fnm`), Python 3.12 + `uv` (other Python versions on demand) | Flask, FastAPI and Vite/React work without installing anything per project |
 | Dev apps in the browser | code-server's per-port proxy on hostnames `<port>-dev.<domain>` | Projects run unchanged on every device; no `base` path or host settings |
 | AI agent | Claude Code, installed in the code-server image | Available in the integrated terminal |
 | Session persistence | tmux | Keeps terminal processes alive across browser disconnects |
