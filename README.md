@@ -67,6 +67,7 @@ served; reach it from your notebook with `ssh -L 8443:127.0.0.1:8443 devvm`.
 | `./bootstrap.sh --update` | `git pull`, re-run the pulled script, refresh host-derived values and pinned versions in `.env`, rebuild, restart |
 | `./bootstrap.sh --check` | Read-only health check of the running stack (non-zero exit on failure) |
 | `./bootstrap.sh --mariadb` | Enable or disable the dev database (generates passwords, writes the credentials file) |
+| `./bootstrap.sh --db-app NAME` | Database user `NAME` limited to the database `dev_NAME`, settings in `config/mariadb-apps/NAME.env`; `--password` / `--database` let you type the password / database name yourself (combinable), `--delete` removes the user, `--db-app` alone lists them |
 | `./bootstrap.sh --dev-hosts` | Change the domain and ports for the dev app hostnames, restart code-server, print the Cloudflare checklist |
 | `DEV_PASSWORD=... TUNNEL_TOKEN=... DEV_DOMAIN=example.com DEV_PORTS='5173 8000' DEV_DB=yes ./bootstrap.sh` | Non-interactive (only the password is required) |
 
@@ -167,6 +168,23 @@ supervised `socat` forwarder), so a project connects exactly as it would on a la
   nothing else. Passwords are generated; the `dev` password is in
   `/config/mariadb-credentials.txt` inside code-server, the root password only in
   `~/dev-server/.env` on the VM. Admin shell: `docker exec -it mariadb mariadb -uroot -p`.
+- The `mariadb` command line client is in the image. `config/.my.cnf` (`~/.my.cnf` in
+  code-server) logs it in as `dev` over `127.0.0.1`, so `mariadb` or `mariadb dev_myapp` just
+  works. `bootstrap.sh` rewrites that file on each run; remove its first (marker) line to keep
+  your own version.
+- One user per app: `vm$ ./bootstrap.sh --db-app <user>` creates the user `<user>` and the
+  database `dev_<user>`; it can use only that database, `dev` can use it too. To name the
+  database yourself, add `--database`: it asks for the name (or takes
+  `DB_APP_DATABASE=...`; letters, digits and `_`). Changing it later moves the user's access to
+  the new database and keeps the old one with its data. `dev` gets access to such a database
+  as well. The settings, including a `DATABASE_URL`, are in
+  `/config/mariadb-apps/<user>.env`; re-running keeps the password. To choose the password
+  yourself (or change it later), run `./bootstrap.sh --db-app <user> --password`: it asks for it
+  twice (or takes `DB_APP_PASSWORD=...`). At least 8 characters, no spaces and none of
+  ``' " ` \ # $``. `--db-app <user> --delete`
+  drops the user and keeps the database; `--db-app` alone lists the app users.
+- Root stays out of code-server: its password is only in `.env` on the VM, and you need it
+  only for administration (other users, global settings), via `docker exec` as below.
 - Connect with `127.0.0.1`, not `localhost`: MySQL/MariaDB clients treat `localhost` as a
   unix socket. Example: `mysql+pymysql://dev:<password>@127.0.0.1:3306/dev_myapp`. Use a
   pure-Python driver (PyMySQL, asyncmy, aiomysql); `mysqlclient` needs a compiler and

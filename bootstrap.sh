@@ -9,6 +9,11 @@
 #   ./bootstrap.sh --check        # verify the running stack (read-only)
 #   ./bootstrap.sh --dev-hosts    # change the domain/ports for dev app hostnames
 #   ./bootstrap.sh --mariadb      # enable or disable the dev database
+#   ./bootstrap.sh --db-app NAME  # database user + database dev_NAME for one app
+#   ./bootstrap.sh --db-app NAME --password # same, with a password you type (or DB_APP_PASSWORD=...)
+#   ./bootstrap.sh --db-app NAME --database # same, with a database name you type (or DB_APP_DATABASE=...)
+#   ./bootstrap.sh --db-app NAME --delete   # remove that user (the database is kept)
+#   ./bootstrap.sh --db-app       # list the app users
 #
 # Non-interactive: DEV_PASSWORD=... TUNNEL_TOKEN=... ./bootstrap.sh
 set -euo pipefail
@@ -21,7 +26,7 @@ die() { echo "ERROR: $*" >&2; exit 1; }
 info() { echo "==> $*"; }
 
 [ "$(id -u)" -ne 0 ] || die "run as your normal user (needs sudo), not as root"
-case "$MODE" in ""|--reconfigure|--update|--check|--dev-hosts|--mariadb) ;; *) die "unknown option: $MODE" ;; esac
+case "$MODE" in ""|--reconfigure|--update|--check|--dev-hosts|--mariadb|--db-app) ;; *) die "unknown option: $MODE" ;; esac
 
 install_docker() {
   command -v docker >/dev/null 2>&1 && return
@@ -289,14 +294,162 @@ MariaDB for dev projects (reachable only from code-server: no published port, no
 
 Example (SQLAlchemy + PyMySQL):  mysql+pymysql://dev:$(env_get MARIADB_DEV_PASSWORD)@127.0.0.1:3306/dev_myapp
 
+Command line: just type  mariadb  (or mariadb dev_myapp); ~/.my.cnf logs you in as 'dev'.
+
+One user per app: on the VM run  ./bootstrap.sh --db-app myapp  to get a user 'myapp' that can
+use only the database dev_myapp; its settings land in /config/mariadb-apps/myapp.env.
+
 Administration: the root password is MARIADB_ROOT_PASSWORD in ~/dev-server/.env on the VM; shell:
   docker exec -it mariadb mariadb -uroot -p
 EOF
   )
 }
 
+# ~/.my.cnf in code-server (HOME is /config): the mariadb client connects as 'dev' over TCP
+# without options. Only a file carrying the marker line is ever overwritten or removed.
+MYCNF_MARKER="# Written by bootstrap.sh; delete this line to keep your own edits."
+write_db_client_conf() {
+  local f=config/.my.cnf
+  if [ -f "$f" ] && ! grep -qxF "$MYCNF_MARKER" "$f"; then
+    info "Keeping your own config/.my.cnf (no bootstrap marker)"
+    return 0
+  fi
+  ( umask 077
+    printf '%s\n[client]\nhost=127.0.0.1\nport=3306\nuser=dev\npassword=%s\n' \
+      "$MYCNF_MARKER" "$(env_get MARIADB_DEV_PASSWORD)" > "$f"
+  )
+}
+
 sync_db_credentials() {
-  if [ -n "$(env_get DB_FORWARD)" ]; then write_db_credentials; else rm -f config/mariadb-credentials.txt; fi
+  if [ -n "$(env_get DB_FORWARD)" ]; then
+    write_db_credentials
+    write_db_client_conf
+  else
+    rm -f config/mariadb-credentials.txt
+    if grep -qxF "$MYCNF_MARKER" config/.my.cnf 2>/dev/null; then rm -f config/.my.cnf; fi
+  fi
+}
+
+db_root() { # mariadb client as root inside the mariadb container; SQL on stdin, extra args passed on
+  "${DOCKER[@]}" exec -i -e "MARIADB_PW=$(env_get MARIADB_ROOT_PASSWORD)" mariadb \
+    sh -c 'exec mariadb -uroot -p"$MARIADB_PW" "$@"' sh "$@"
+}
+
+valid_app_name() { # sets APP_ERROR
+  [[ "$1" =~ ^[a-z][a-z0-9_-]{0,31}$ ]] || { APP_ERROR="use lowercase letters, digits, _ and -, starting with a letter (max 32)"; return 1; }
+  case "$1" in root|dev|healthcheck|mysql|mariadb|pma) APP_ERROR="'$1' is reserved"; return 1 ;; esac
+}
+
+# The password goes into SQL, a .env file and a URL: keep out what would need quoting there.
+valid_db_password() { # sets PW_ERROR
+  [ "${#1}" -ge 8 ] || { PW_ERROR="at least 8 characters are required"; return 1; }
+  case "$1" in *[[:space:]\'\"\`\\#\$]*) PW_ERROR="it must not contain spaces or any of  ' \" \` \\ # \$"; return 1 ;; esac
+}
+
+ask_db_password() { # -> DB_APP_PW (from DB_APP_PASSWORD or a hidden prompt)
+  if [ -n "${DB_APP_PASSWORD:-}" ]; then
+    valid_db_password "$DB_APP_PASSWORD" || die "DB_APP_PASSWORD: $PW_ERROR"
+    DB_APP_PW=$DB_APP_PASSWORD; return
+  fi
+  local a b
+  while :; do
+    read_secret "  password for '$1': "; a=$REPLY
+    valid_db_password "$a" || { echo "  Not accepted: $PW_ERROR. Try again."; continue; }
+    read_secret "  repeat password: "; b=$REPLY
+    [ "$a" = "$b" ] || { echo "  The two entries differ. Try again."; continue; }
+    DB_APP_PW=$a; break
+  done
+}
+
+urlencode() { # percent-encode everything but unreserved URL characters
+  local s=$1 i c out=""
+  for ((i = 0; i < ${#s}; i++)); do
+    c=${s:i:1}
+    case "$c" in [A-Za-z0-9._~-]) out+=$c ;; *) printf -v c '%%%02X' "'$c"; out+=$c ;; esac
+  done
+  echo "$out"
+}
+
+valid_db_name() { # sets DBN_ERROR
+  [[ "$1" =~ ^[A-Za-z0-9_]{1,64}$ ]] || { DBN_ERROR="use letters, digits and _ (max 64)"; return 1; }
+  case "${1,,}" in mysql|information_schema|performance_schema|sys) DBN_ERROR="'$1' is a system database"; return 1 ;; esac
+}
+
+app_env_get() { # NAME KEY: value from config/mariadb-apps/NAME.env (empty if missing)
+  [ -f "config/mariadb-apps/$1.env" ] || return 0
+  sed -n "s/^$2=//p" "config/mariadb-apps/$1.env"
+}
+
+ask_db_name() { # NAME -> DB_APP_DB (from DB_APP_DATABASE or a prompt; default: current, else dev_NAME)
+  if [ -n "${DB_APP_DATABASE:-}" ]; then
+    valid_db_name "$DB_APP_DATABASE" || die "DB_APP_DATABASE: $DBN_ERROR"
+    DB_APP_DB=$DB_APP_DATABASE; return
+  fi
+  [ -t 0 ] || die "no terminal for the database name; provide DB_APP_DATABASE"
+  local def
+  def=$(app_env_get "$1" DB_NAME); def=${def:-dev_${1//-/_}}
+  while :; do
+    read -rp "  database for '$1' [$def]: " DB_APP_DB
+    DB_APP_DB=${DB_APP_DB:-$def}
+    valid_db_name "$DB_APP_DB" && break
+    echo "  Not accepted: $DBN_ERROR. Try again."
+  done
+}
+
+# App users: user NAME may use only its own database, dev_NAME (- becomes _) unless chosen otherwise. The
+# 'dev' user can use it too (dev_* already, any other name gets a grant). Password and database
+# are the ones given, else the ones in config/mariadb-apps/NAME.env (so re-runs keep them),
+# else a generated password and dev_NAME.
+db_app_create() { # NAME [PW] [DB]
+  local name=$1 f="config/mariadb-apps/$1.env" pw=${2:-} db=${3:-} old_db dev_grant=""
+  old_db=$(app_env_get "$name" DB_NAME)
+  [ -n "$pw" ] || pw=$(app_env_get "$name" DB_PASSWORD)
+  [ -n "$pw" ] || pw=$(gen_secret)
+  [ -n "$db" ] || db=${old_db:-dev_${name//-/_}}
+  [[ "$db" == dev_* ]] || dev_grant="GRANT ALL PRIVILEGES ON \`$db\`.* TO 'dev'@'%';"
+  db_root <<SQL
+CREATE DATABASE IF NOT EXISTS \`$db\`;
+CREATE USER IF NOT EXISTS '$name'@'%' IDENTIFIED BY '$pw';
+ALTER USER '$name'@'%' IDENTIFIED BY '$pw';
+GRANT ALL PRIVILEGES ON \`$db\`.* TO '$name'@'%';
+$dev_grant
+SQL
+  if [ -n "$old_db" ] && [ "$old_db" != "$db" ]; then
+    db_root <<<"REVOKE ALL PRIVILEGES ON \`$old_db\`.* FROM '$name'@'%';" 2>/dev/null || true
+    info "'$name' no longer has access to '$old_db' (that database is kept)"
+  fi
+  mkdir -p config/mariadb-apps
+  chmod 700 config/mariadb-apps
+  ( umask 077
+    cat > "$f" <<EOF
+# MariaDB for the app '$name' (written by ./bootstrap.sh --db-app $name; re-running keeps password and database)
+DB_HOST=127.0.0.1
+DB_PORT=3306
+DB_NAME=$db
+DB_USER=$name
+DB_PASSWORD=$pw
+DATABASE_URL=mysql+pymysql://$name:$(urlencode "$pw")@127.0.0.1:3306/$db
+EOF
+  )
+  info "User '$name' can use database '$db' (and nothing else; 'dev' can use it too)"
+  echo "Settings for the app: config/mariadb-apps/$name.env (inside code-server: /config/mariadb-apps/$name.env)"
+  echo "Command line in code-server:  mariadb -u $name -p $db"
+}
+
+db_app_delete() {
+  local name=$1 db
+  db=$(app_env_get "$name" DB_NAME); db=${db:-dev_${name//-/_}}
+  db_root <<<"DROP USER IF EXISTS '$name'@'%';"
+  rm -f "config/mariadb-apps/$name.env"
+  info "Removed user '$name'. The database $db is kept; drop it with:  mariadb -e 'DROP DATABASE $db'"
+}
+
+db_app_list() {
+  echo "App users (user -> database):"
+  db_root -N -B <<'SQL' | sed 's/^/  /'
+SELECT CONCAT(User, ' -> ', Db) FROM mysql.db
+WHERE User NOT IN ('', 'root', 'dev', 'healthcheck', 'mariadb.sys') ORDER BY User;
+SQL
 }
 
 write_env() {
@@ -360,6 +513,7 @@ sync_env() {
   [ -z "$gid" ] || set_env DOCKER_GID "$gid"
   set_env PROJECTS_DIR "$REPO_DIR/projects"
   sync_versions
+  sync_db_credentials
 }
 
 run_checks() { # read-only verification of the running stack
@@ -390,6 +544,8 @@ run_checks() { # read-only verification of the running stack
     [ "$state" = healthy ] && pass "mariadb healthy" || fail "mariadb health: ${state:-not found}"
     "${DOCKER[@]}" exec code-server timeout 3 bash -c '</dev/tcp/127.0.0.1/3306' >/dev/null 2>&1 \
       && pass "database reachable from code-server at 127.0.0.1:3306" || fail "database not reachable from code-server at 127.0.0.1:3306"
+    "${DOCKER[@]}" exec -u abc -e HOME=/config code-server mariadb -e 'SELECT 1' >/dev/null 2>&1 \
+      && pass "mariadb client in code-server logs in as dev" || warn "mariadb client in code-server cannot log in (rebuild with ./bootstrap.sh; config/.my.cnf)"
   fi
   local dpat dports dp dh dans
   dpat=$(env_get PROXY_DOMAIN); dports=$(env_get DEV_PORTS)
@@ -441,6 +597,33 @@ if [ "$MODE" = "--mariadb" ]; then
     "${DOCKER[@]}" compose --profile db rm -f mariadb || true
     "${DOCKER[@]}" compose up -d
   fi
+  exit 0
+fi
+
+if [ "$MODE" = "--db-app" ]; then
+  [ -f .env ] || die ".env not found: run ./bootstrap.sh first"
+  [ -n "$(env_get DB_FORWARD)" ] || die "the dev database is off: enable it with ./bootstrap.sh --mariadb"
+  setup_docker_access
+  [ "$("${DOCKER[@]}" inspect -f '{{.State.Running}}' mariadb 2>/dev/null)" = true ] || die "the mariadb container is not running"
+  APP_NAME="" DB_APP_PW="" DB_APP_DB="" app_delete="" ask_pw="" ask_db=""
+  for arg in "${@:2}"; do
+    case "$arg" in
+      --password) ask_pw=1 ;;
+      --database) ask_db=1 ;;
+      --delete) app_delete=1 ;;
+      -*) die "unknown option: $arg (--password, --database or --delete)" ;;
+      *) [ -z "$APP_NAME" ] || die "one app name only"; APP_NAME=$arg ;;
+    esac
+  done
+  if [ -z "$APP_NAME" ]; then db_app_list; exit 0; fi
+  valid_app_name "$APP_NAME" || die "app name: $APP_ERROR"
+  if [ -n "$app_delete" ]; then
+    [ -z "$ask_pw$ask_db" ] || die "--delete cannot be combined with --password or --database"
+    db_app_delete "$APP_NAME"; exit 0
+  fi
+  [ -z "$ask_db" ] || ask_db_name "$APP_NAME"
+  [ -z "$ask_pw" ] || ask_db_password "$APP_NAME"
+  db_app_create "$APP_NAME" "$DB_APP_PW" "$DB_APP_DB"
   exit 0
 fi
 
