@@ -86,9 +86,9 @@ environment variables. `--dev-hosts`, `--mariadb` and `--agents` change those la
   loss: Power On", and the router (the Fritzbox resolves `<hostname>.fritz.box`).
 - The Cloudflare tunnel, its public hostname and the Access policy (clicks in the
   dashboard; plan 2.1 and Phase 3). You copy the tunnel token into `bootstrap.sh`.
-- The Public Hostname and Access entry for each dev app port (plan 3.3); `bootstrap.sh`
+- The tunnel route (Published application) and Access entry for each dev app port (plan 3.3); `bootstrap.sh`
   prints the names and `--check` tells which are missing.
-- The agent dashboard's Public Hostname (`code-server:8790`), its entry in the Access
+- The agent dashboard's tunnel route (Published application, `code-server:8790`), its entry in the Access
   application, and copying the team domain and the application's AUD tag into
   `bootstrap.sh`; it prints the checklist and `--check` tells what is missing.
 - The GitHub fine-grained token and the Claude Code login (plan Phase 4).

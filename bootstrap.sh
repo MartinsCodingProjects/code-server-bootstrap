@@ -229,7 +229,7 @@ print_dev_checklist() {
   [ -n "$pat" ] || return 0
   echo
   explain "Dev app hostnames: add each of these in Cloudflare, once (Zero Trust > Networks > Tunnels >
-your tunnel > Public Hostname > Add): type HTTP, URL code-server:8443.
+your tunnel > Routes > Add route > Published application): service HTTP, URL code-server:8443.
 $(for p in $ports; do echo "  ${pat//'{{port}}'/$p}"; done)
 Then add the same names to your Access application (list the exact names; do not use a wildcard
 that could also cover your other subdomains). Check what is still missing with: ./bootstrap.sh --check"
@@ -323,8 +323,8 @@ print_agents_checklist() {
   [ -n "$host" ] || return 0
   echo
   explain "Agent dashboard: set up in Cloudflare, once:
-1. Zero Trust > Networks > Tunnels > your tunnel > Public Hostname > Add: $host,
-   type HTTP, URL code-server:8790.
+1. Zero Trust > Networks > Tunnels > your tunnel > Routes > Add route > Published application:
+   $host, service HTTP, URL code-server:8790.
 2. Add $host to the Access application that protects the IDE.
 $( { [ -n "$(env_get CF_ACCESS_TEAM_DOMAIN)" ] && [ -n "$(env_get CF_ACCESS_AUD)" ]; } \
   || echo "3. Team domain and AUD tag are missing, so the dashboard refuses tunnel requests: ./bootstrap.sh --agents")
@@ -652,7 +652,7 @@ run_checks() { # read-only verification of the running stack
       case "$(dev_host_status "$dans")" in
         ok) pass "$dh is set up and behind Cloudflare Access" ;;
         noaccess) warn "$dh works but is NOT behind Access (code-server's cookie still protects it): add it to your Access application" ;;
-        *) warn "$dh is not set up in Cloudflare yet (answer: ${dans:-none}): add a Public Hostname to code-server:8443" ;;
+        *) warn "$dh is not set up in Cloudflare yet (answer: ${dans:-none}): add a tunnel route (Published application) to code-server:8443" ;;
       esac
     done
   fi
@@ -660,7 +660,7 @@ run_checks() { # read-only verification of the running stack
     && pass "agent hooks and status line registered (managed settings)" || fail "managed settings missing in code-server (rebuild with ./bootstrap.sh)"
   "${DOCKER[@]}" exec code-server curl -fsS -m 5 -o /dev/null http://127.0.0.1:8790/healthz \
     && pass "agent dashboard answers in code-server" || fail "agent dashboard not answering (docker compose logs code-server)"
-  "${DOCKER[@]}" exec code-server curl -fsS -m 5 -o /dev/null http://127.0.0.1:8790/term/ \
+  "${DOCKER[@]}" exec code-server curl -fsS -m 5 -o /dev/null http://127.0.0.1:7681/term/ \
     && pass "agent web terminal (ttyd) answers" || fail "agent web terminal not answering (s6-svc -r /run/service/svc-agent-term)"
   local last_day
   last_day=$("${DOCKER[@]}" exec -u abc code-server sh -c 'ls /config/.claude/agent-events 2>/dev/null | tail -n1' 2>/dev/null || true)
@@ -676,7 +676,7 @@ run_checks() { # read-only verification of the running stack
       noaccess) fail "$ahost is reachable WITHOUT Cloudflare Access: add it to your Access application" ;;
       *) case "$aans" in
            403\ *) fail "$ahost is reachable WITHOUT Cloudflare Access (the dashboard refused it): add it to your Access application" ;;
-           *) warn "$ahost is not set up in Cloudflare yet (answer: ${aans:-none}): add a Public Hostname to code-server:8790" ;;
+           *) warn "$ahost is not set up in Cloudflare yet (answer: ${aans:-none}): add a tunnel route (Published application) to code-server:8790" ;;
          esac ;;
     esac
   fi

@@ -100,8 +100,8 @@ container, exactly like `http://localhost:5173` would.
    4173 5174`), or run `./bootstrap.sh --dev-hosts` later to change them. It prints the
    list of hostnames.
 2. In the Cloudflare dashboard, once per hostname (the entries live in your account and
-   survive rebuilds): Tunnel, Public Hostname, Add: the hostname, type **HTTP**, URL
-   **`code-server:8443`**. Then add the same **exact names** to your Access application.
+   survive rebuilds): Networks, Tunnels, your tunnel, Routes, Add route, Published
+   application: the hostname, service **HTTP**, URL **`code-server:8443`**. Then add the same **exact names** to your Access application.
    Do not use a wildcard Access rule if the domain also hosts other sites. If the domain
    already has a wildcard DNS record, explicit records override it for these names only.
 3. `./bootstrap.sh --check` lists which hostnames are not set up yet (or not behind Access).
@@ -299,7 +299,8 @@ forms cannot send).
 (e.g. `agents.example.com`), the IDE address for the links and two values from Cloudflare
 Access, then prints the checklist:
 
-1. Public Hostname in the tunnel: the dashboard hostname, type HTTP, URL `code-server:8790`.
+1. A route in the tunnel (Routes > Add route > Published application): the dashboard
+   hostname, service HTTP, URL `code-server:8790`.
 2. Add the hostname to the Access application that protects the IDE.
 3. Team domain (Zero Trust > Settings) and that application's AUD tag (Access >
    Applications > Configure > Basic information). The dashboard verifies the Access token

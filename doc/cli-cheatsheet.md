@@ -315,13 +315,13 @@ Answers are remembered in `setup/setup.env` (git-ignored). See
 | `REMOTE HOST IDENTIFICATION HAS CHANGED` | rebuilt host or VM? | `ssh-keygen -R <name or IP>` |
 | `sudo: command not found` on a fresh Debian | root password was set at install | `su -`, `apt install -y sudo`, `usermod -aG sudo <user>`, log in again |
 | VM did not come back after a power cut | `virsh list --all`, `virsh dominfo devvm` | `virsh autostart devvm`; check the BIOS "Power On after AC loss" |
-| A dev app hostname (`5173-dev.<domain>`) shows 401, 503 or a Cloudflare error | `vm$ ./bootstrap.sh --check` | 401: log in at the IDE first; 503/530/no DNS: add the hostname in Cloudflare (Public Hostname, HTTP, `code-server:8443`) and to Access; app not listening: start it on any interface, `ECONNREFUSED` means nothing listens on that port |
+| A dev app hostname (`5173-dev.<domain>`) shows 401, 503 or a Cloudflare error | `vm$ ./bootstrap.sh --check` | 401: log in at the IDE first; 503/530/no DNS: add the hostname in Cloudflare (tunnel route, Published application, HTTP, `code-server:8443`) and to Access; app not listening: start it on any interface, `ECONNREFUSED` means nothing listens on that port |
 | An agent session does nothing after `agent-start` | `agent-attach <folder>` | Claude waits at the trust question for a new folder, or at a permission prompt: answer it there or in the Claude app |
 | An agent session is missing in the Claude app | `agent-ls`; `agent-attach <folder>` | `exited`: run `agent-start` again; Claude not logged in: run `claude` once and log in |
 | The agent dashboard shows a text starting with "Cloudflare Access is not configured", or "token rejected" | `vm$ ./bootstrap.sh --check` | Set team domain and AUD tag with `./bootstrap.sh --agents`; the AUD tag must be that of the Access application that contains the dashboard hostname |
 | Dashboard terminal stays black or says the terminal is not running | `ct$ agent-ls`; `vm$ ./bootstrap.sh --check` | The session must be running (Start on its card); restart ttyd (`s6-svc -r /run/service/svc-agent-term`) |
 | Start in the dashboard does nothing visible | the message at the bottom right; `ct$ agent-ls` | A new folder waits at the trust question: open its Terminal and answer it |
-| Agent dashboard: 502/530 or a Cloudflare error | `vm$ ./bootstrap.sh --check` | Add the Public Hostname (`code-server:8790`) in the tunnel; check the service: `docker compose logs code-server` |
+| Agent dashboard: 502/530 or a Cloudflare error | `vm$ ./bootstrap.sh --check` | Add the tunnel route (Routes > Add route > Published application, `code-server:8790`); check the service: `docker compose logs code-server` |
 | No 5h/7d limits in `~/.claude/agent-state/` | the session has had no answer yet | The limits arrive with the first API response (subscription logins only) |
 | tmux exits immediately in the container | `echo $SHELL` is `/bin/false` | Fixed by `/etc/tmux.conf` in the image; rebuild if missing |
 | `./bootstrap.sh` says permission denied on docker | group not active yet | Log in again, or use `sudo docker` |

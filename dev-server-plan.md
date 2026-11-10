@@ -647,8 +647,8 @@ gate).
 
 For dev servers at `https://<port>-dev.<domain>` (README, "Developing in the
 browser"): `./bootstrap.sh` (or `--dev-hosts` later) asks for the domain and the
-ports and prints the names. For each one add a tunnel Public Hostname (type HTTP,
-URL `code-server:8443`) and add the **exact name** to your Access application; do
+ports and prints the names. For each one add a tunnel route (Routes > Add route >
+Published application; service HTTP, URL `code-server:8443`) and add the **exact name** to your Access application; do
 not use a wildcard Access rule if the domain also hosts other sites. Without Access
 a name still answers 401 until you are logged in to the IDE, but Access is the first
 gate. `./bootstrap.sh --check` reports names that are missing or not behind Access.
