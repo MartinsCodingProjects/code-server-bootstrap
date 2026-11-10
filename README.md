@@ -63,13 +63,14 @@ served; reach it from your notebook with `ssh -L 8443:127.0.0.1:8443 devvm`.
 | Command | Purpose |
 |---|---|
 | `./bootstrap.sh` | First run or re-run; keeps an existing `.env` |
-| `./bootstrap.sh --reconfigure` | Ask everything again (password, token, dev hostnames, database); existing database passwords are kept |
+| `./bootstrap.sh --reconfigure` | Ask everything again (password, token, dev hostnames, database, agent dashboard); existing database passwords are kept |
 | `./bootstrap.sh --update` | `git pull`, re-run the pulled script, refresh host-derived values and pinned versions in `.env`, rebuild, restart |
 | `./bootstrap.sh --check` | Read-only health check of the running stack (non-zero exit on failure) |
 | `./bootstrap.sh --mariadb` | Enable or disable the dev database (generates passwords, writes the credentials file) |
 | `./bootstrap.sh --db-app NAME` | Database user `NAME` limited to the database `dev_NAME`, settings in `config/mariadb-apps/NAME.env`; `--password` / `--database` let you type the password / database name yourself (combinable), `--delete` removes the user, `--db-app` alone lists them |
 | `./bootstrap.sh --dev-hosts` | Change the domain and ports for the dev app hostnames, restart code-server, print the Cloudflare checklist |
-| `DEV_PASSWORD=... TUNNEL_TOKEN=... DEV_DOMAIN=example.com DEV_PORTS='5173 8000' DEV_DB=yes ./bootstrap.sh` | Non-interactive (only the password is required) |
+| `./bootstrap.sh --agents` | Hostname, IDE URL and Cloudflare Access settings of the agent dashboard, restart code-server, print the Cloudflare checklist |
+| `DEV_PASSWORD=... TUNNEL_TOKEN=... DEV_DOMAIN=example.com DEV_PORTS='5173 8000' DEV_DB=yes AGENTS_HOST=agents.example.com CODE_SERVER_URL=https://dev.example.com CF_ACCESS_TEAM_DOMAIN=myteam CF_ACCESS_AUD=... ./bootstrap.sh` | Non-interactive (only the password is required) |
 
 ## Developing in the browser (Flask, FastAPI, Vite, React, ...)
 
@@ -251,6 +252,40 @@ not part of the telemetry. All of this stays in `config/` on the VM.
 Your own status line still works: if `~/.claude/settings.json` sets
 `statusLine.command`, the image's status line records its data and then runs yours.
 
+### Agent dashboard
+
+A web page with every session's status and the history of what the agents did, for the
+browser and the phone. It runs in code-server (supervised service, port 8790), reads the
+files above and receives the agent sessions' telemetry; its database is
+`config/agent-dashboard/agents.db` (kept 90 days, like the files above).
+
+- **Sessions:** one card per project folder (running agent sessions, folders with a
+  session in the last 24 hours): status (*works*, *needs permission*, *waits for input*,
+  *confirm folder* for the trust question, *error*, *Claude exited*, *stopped*), model,
+  context use, estimated cost and time, git branch and changes, PR, the last event, links
+  to the folder in code-server and to the history. The top bar shows the 5-hour and 7-day
+  limits with their reset times. What needs you comes first.
+- **History:** every event of all projects, newest first and live. Filter by project (a
+  parent folder includes its subfolders), session, category, time range and text; the
+  filters are part of the URL, so a filtered view can be bookmarked. Click an event for its
+  full record; export as JSONL or CSV. Telemetry details (every API request, tool timing)
+  are a category of their own, off by default.
+
+**Hostname:** `./bootstrap.sh --agents` (also asked on the first run) stores the hostname
+(e.g. `agents.example.com`), the IDE address for the links and two values from Cloudflare
+Access, then prints the checklist:
+
+1. Public Hostname in the tunnel: the dashboard hostname, type HTTP, URL `code-server:8790`.
+2. Add the hostname to the Access application that protects the IDE.
+3. Team domain (Zero Trust > Settings) and that application's AUD tag (Access >
+   Applications > Configure > Basic information). The dashboard verifies the Access token
+   on every request itself, because it can control sessions: a missing Access rule must not
+   open it. Without these two values it refuses everything that comes through the tunnel.
+
+Without a hostname the dashboard is still there, inside the IDE: open
+`https://<ide>/proxy/8790/` (with the trailing slash), behind code-server's password.
+`./bootstrap.sh --check` tests the service, the Access settings and the hostname.
+
 ## Layout
 
 | Path | Purpose |
@@ -260,7 +295,8 @@ Your own status line still works: if `~/.claude/settings.json` sets
 | `docker-compose.yml` | `code-server`, `cloudflared` (profile `tunnel`) and `mariadb` (profile `db`) |
 | `patches/` | Build-time workaround for a code-server cookie bug (fails the build if code-server changed) |
 | `docker/svc-db-forward/` | Supervised service that forwards `127.0.0.1:3306` in code-server to MariaDB |
-| `agents/` | Agent sessions: `agent-*` commands, the event hook and status line, and the managed settings that register them (see "Agent sessions") |
+| `agents/` | Agent sessions: `agent-*` commands, the event hook and status line, the managed settings that register them, and the dashboard (`agents/dashboard/`, Python, tests in `tests/`) |
+| `docker/svc-agent-dashboard/` | Supervised service that runs the agent dashboard on port 8790 in code-server |
 | `mariadb/initdb.d/` | First-start SQL for the database (the `dev_*` privileges) |
 | `.env.example` | Documents the variables `bootstrap.sh` writes (also the pinned versions) |
 | `config/` | code-server user data and logins (git-ignored) |

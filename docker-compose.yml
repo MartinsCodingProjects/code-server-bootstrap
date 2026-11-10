@@ -34,6 +34,11 @@ services:
       NODE_OPTIONS: --dns-result-order=ipv4first
       __VITE_ADDITIONAL_SERVER_ALLOWED_HOSTS: ${DEV_ALLOWED_HOSTS:-}
       DB_FORWARD: ${DB_FORWARD:-}
+      # Agent dashboard (README, "Agent sessions"; ./bootstrap.sh --agents): links to the IDE,
+      # and the Cloudflare Access application whose token it requires.
+      CODE_SERVER_URL: ${CODE_SERVER_URL:-}
+      CF_ACCESS_TEAM_DOMAIN: ${CF_ACCESS_TEAM_DOMAIN:-}
+      CF_ACCESS_AUD: ${CF_ACCESS_AUD:-}
     networks:
       - default
       - dbnet

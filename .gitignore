@@ -2,3 +2,5 @@
 config/
 projects/
 setup/setup.env
+__pycache__/
+agents/dashboard/.venv/

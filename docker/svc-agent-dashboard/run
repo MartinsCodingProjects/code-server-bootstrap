@@ -1,0 +1,10 @@
+#!/usr/bin/with-contenv bash
+# Agent dashboard (README, "Agent sessions"): status, history and usage of the Claude Code
+# sessions on port 8790, for the Cloudflare Tunnel hostname AGENTS_HOST and as the target of
+# the agent sessions' telemetry. Runs as the code-server user, so it sees the same tmux
+# sessions and ~/.claude. Without Cloudflare Access settings it answers this container only
+# (also through code-server's own proxy: https://<ide>/proxy/8790/).
+cd /opt/agent-dashboard || exit 1
+exec s6-setuidgid abc env HOME=/config \
+    /opt/agent-dashboard/.venv/bin/uvicorn --factory agent_dashboard.main:app \
+    --host 0.0.0.0 --port 8790 --no-access-log --timeout-graceful-shutdown 3

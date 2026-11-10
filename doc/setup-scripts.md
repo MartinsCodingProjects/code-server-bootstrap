@@ -19,7 +19,8 @@ notebook-setup.sh  ──key──▶     host-setup.sh
                                 create-vm.sh  ──cloud-init──▶        user, key, updates, git clone
 ssh devvm 'cloud-init status --wait'                                 
 ssh devvm                                                            ./bootstrap.sh
-                                                                       (password, token, dev hostnames, database)
+                                                                       (password, token, dev hostnames, database,
+                                                                        agent dashboard)
 verify-isolation.sh ─────────────────────────────────────────▶       checks
                                 create-vm.sh --finish                (removes the seed disk)
 ```
@@ -56,9 +57,11 @@ keys that will be installed, the repository URL, time zone, RAM, cores, disk.
 `bootstrap.sh`: the code-server password (at least 12 characters); the tunnel
 token (paste it, or Enter to skip and use `ssh -L` instead); an optional domain and
 the ports for the dev app hostnames (default `5173 8000 5000 3000 4173 5174`); and
-whether to run MariaDB (default yes; passwords are generated). Non-interactive:
-`DEV_PASSWORD`, `TUNNEL_TOKEN`, `DEV_DOMAIN`, `DEV_PORTS` and `DEV_DB` environment
-variables. `--dev-hosts` and `--mariadb` change those two later.
+whether to run MariaDB (default yes; passwords are generated); optionally the agent
+dashboard's hostname, the IDE address and the Cloudflare Access team domain and AUD tag
+(Enter skips). Non-interactive: `DEV_PASSWORD`, `TUNNEL_TOKEN`, `DEV_DOMAIN`, `DEV_PORTS`,
+`DEV_DB`, `AGENTS_HOST`, `CODE_SERVER_URL`, `CF_ACCESS_TEAM_DOMAIN` and `CF_ACCESS_AUD`
+environment variables. `--dev-hosts`, `--mariadb` and `--agents` change those later.
 
 ## Safety design
 
@@ -85,6 +88,9 @@ variables. `--dev-hosts` and `--mariadb` change those two later.
   dashboard; plan 2.1 and Phase 3). You copy the tunnel token into `bootstrap.sh`.
 - The Public Hostname and Access entry for each dev app port (plan 3.3); `bootstrap.sh`
   prints the names and `--check` tells which are missing.
+- The agent dashboard's Public Hostname (`code-server:8790`), its entry in the Access
+  application, and copying the team domain and the application's AUD tag into
+  `bootstrap.sh`; it prints the checklist and `--check` tells what is missing.
 - The GitHub fine-grained token and the Claude Code login (plan Phase 4).
 
 ## Tested and not tested

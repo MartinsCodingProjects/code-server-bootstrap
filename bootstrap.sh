@@ -14,8 +14,11 @@
 #   ./bootstrap.sh --db-app NAME --database # same, with a database name you type (or DB_APP_DATABASE=...)
 #   ./bootstrap.sh --db-app NAME --delete   # remove that user (the database is kept)
 #   ./bootstrap.sh --db-app       # list the app users
+#   ./bootstrap.sh --agents       # hostname and Cloudflare Access for the agent dashboard
 #
 # Non-interactive: DEV_PASSWORD=... TUNNEL_TOKEN=... ./bootstrap.sh
+#   (optional: DEV_DOMAIN, DEV_PORTS, DEV_DB, AGENTS_HOST, CODE_SERVER_URL,
+#    CF_ACCESS_TEAM_DOMAIN, CF_ACCESS_AUD)
 set -euo pipefail
 
 cd "$(dirname "$(readlink -f "$0")")"
@@ -26,7 +29,7 @@ die() { echo "ERROR: $*" >&2; exit 1; }
 info() { echo "==> $*"; }
 
 [ "$(id -u)" -ne 0 ] || die "run as your normal user (needs sudo), not as root"
-case "$MODE" in ""|--reconfigure|--update|--check|--dev-hosts|--mariadb|--db-app) ;; *) die "unknown option: $MODE" ;; esac
+case "$MODE" in ""|--reconfigure|--update|--check|--dev-hosts|--mariadb|--db-app|--agents) ;; *) die "unknown option: $MODE" ;; esac
 
 install_docker() {
   command -v docker >/dev/null 2>&1 && return
@@ -240,6 +243,93 @@ dev_host_status() { # "<http_code> <redirect_url>" -> ok | noaccess | missing
   esac
 }
 
+# --- agent dashboard (README, "Agent sessions") -----------------------------------------------
+
+valid_hostname() { [[ "${1,,}" =~ ^([a-z0-9]([a-z0-9-]*[a-z0-9])?\.)+[a-z]{2,}$ ]]; }
+valid_aud() { [[ "$1" =~ ^[0-9a-f]{64}$ ]]; }
+valid_team() { [[ "${1,,}" =~ ^[a-z0-9-]+(\.cloudflareaccess\.com)?$ ]]; }
+
+# ask_agents: sets AGENTS_HOST_VALUE, CODE_SERVER_URL_VALUE, CF_TEAM_VALUE, CF_AUD_VALUE
+ask_agents() {
+  local cur_host cur_url cur_team cur_aud ans
+  cur_host=$(env_get AGENTS_HOST); cur_url=$(env_get CODE_SERVER_URL)
+  cur_team=$(env_get CF_ACCESS_TEAM_DOMAIN); cur_aud=$(env_get CF_ACCESS_AUD)
+  AGENTS_HOST_VALUE=$cur_host; CODE_SERVER_URL_VALUE=$cur_url; CF_TEAM_VALUE=$cur_team; CF_AUD_VALUE=$cur_aud
+  if [ -n "${AGENTS_HOST:-}" ]; then
+    AGENTS_HOST_VALUE=${AGENTS_HOST,,}
+    valid_hostname "$AGENTS_HOST_VALUE" || die "AGENTS_HOST: not a hostname like agents.example.com"
+    CODE_SERVER_URL_VALUE=${CODE_SERVER_URL:-$cur_url}
+    CF_TEAM_VALUE=${CF_ACCESS_TEAM_DOMAIN:-$cur_team}; CF_AUD_VALUE=${CF_ACCESS_AUD:-$cur_aud}
+    [ -z "$CODE_SERVER_URL_VALUE" ] || [[ "$CODE_SERVER_URL_VALUE" == https://* ]] || die "CODE_SERVER_URL: must start with https://"
+    [ -z "$CF_TEAM_VALUE" ] || valid_team "$CF_TEAM_VALUE" || die "CF_ACCESS_TEAM_DOMAIN: a team name or <team>.cloudflareaccess.com"
+    [ -z "$CF_AUD_VALUE" ] || valid_aud "$CF_AUD_VALUE" || die "CF_ACCESS_AUD: the 64-character AUD tag"
+    return 0
+  fi
+  [ -t 0 ] || return 0
+  echo
+  explain "Agent dashboard (optional)
+A page with the status, history and usage of your Claude Code agent sessions (agent-start), at a
+hostname of its own, e.g. agents.example.com, behind the same Cloudflare Access login as the IDE.
+It runs in any case; without a hostname it is reachable only through the IDE at /proxy/8790/.
+Press Enter to keep the current value (or skip), type - to turn the hostname off.
+Change it later with: ./bootstrap.sh --agents"
+  while :; do
+    read -rp "  dashboard hostname${cur_host:+ [$cur_host]}: " ans
+    if [ -z "$ans" ]; then break; fi
+    if [ "$ans" = "-" ]; then AGENTS_HOST_VALUE=""; return 0; fi
+    valid_hostname "$ans" && { AGENTS_HOST_VALUE=${ans,,}; break; }
+    echo "  Not accepted: enter a hostname like agents.example.com."
+  done
+  [ -n "$AGENTS_HOST_VALUE" ] || return 0
+  echo
+  explain "The address of the IDE (for the 'open in code-server' links), e.g. https://dev.example.com"
+  while :; do
+    read -rp "  IDE URL${cur_url:+ [$cur_url]}: " ans
+    ans=${ans:-$cur_url}
+    [ -z "$ans" ] || [[ "$ans" == https://* ]] && { CODE_SERVER_URL_VALUE=${ans%/}; break; }
+    echo "  Not accepted: it starts with https://"
+  done
+  echo
+  explain "The dashboard checks Cloudflare Access's login token itself (it can start sessions, so a
+mistake in the Access setup must not open it). It needs two values from the Cloudflare dashboard:
+- team domain: Zero Trust > Settings > Team name and domain (e.g. myteam.cloudflareaccess.com)
+- AUD tag: Zero Trust > Access > Applications > the application that protects the IDE and the
+  dashboard hostname > Configure > Basic information > Application Audience (AUD) Tag (64 characters)
+Until both are set, the dashboard refuses requests that come through the tunnel."
+  while :; do
+    read -rp "  team domain${cur_team:+ [$cur_team]}: " ans
+    ans=${ans:-$cur_team}
+    [ -z "$ans" ] || valid_team "$ans" && { CF_TEAM_VALUE=${ans,,}; break; }
+    echo "  Not accepted: a team name or <team>.cloudflareaccess.com."
+  done
+  while :; do
+    read -rp "  AUD tag${cur_aud:+ [${cur_aud:0:8}...]}: " ans
+    ans=${ans:-$cur_aud}
+    [ -z "$ans" ] || valid_aud "$ans" && { CF_AUD_VALUE=$ans; break; }
+    echo "  Not accepted: the AUD tag is 64 characters 0-9 and a-f."
+  done
+}
+
+save_agents() {
+  set_env AGENTS_HOST "'$AGENTS_HOST_VALUE'"
+  set_env CODE_SERVER_URL "'$CODE_SERVER_URL_VALUE'"
+  set_env CF_ACCESS_TEAM_DOMAIN "'$CF_TEAM_VALUE'"
+  set_env CF_ACCESS_AUD "'$CF_AUD_VALUE'"
+}
+
+print_agents_checklist() {
+  local host
+  host=$(env_get AGENTS_HOST)
+  [ -n "$host" ] || return 0
+  echo
+  explain "Agent dashboard: set up in Cloudflare, once:
+1. Zero Trust > Networks > Tunnels > your tunnel > Public Hostname > Add: $host,
+   type HTTP, URL code-server:8790.
+2. Add $host to the Access application that protects the IDE.
+$( { [ -n "$(env_get CF_ACCESS_TEAM_DOMAIN)" ] && [ -n "$(env_get CF_ACCESS_AUD)" ]; } \
+  || echo "3. Team domain and AUD tag are missing, so the dashboard refuses tunnel requests: ./bootstrap.sh --agents")
+Check it with: ./bootstrap.sh --check"
+}
 
 gen_secret() { head -c 48 /dev/urandom | base64 | tr -d '/+=\n' | cut -c1-24; }
 
@@ -453,12 +543,14 @@ SQL
 }
 
 write_env() {
-  explain "A few questions follow: the code-server password, the Cloudflare Tunnel token and
-(optional) hostnames for dev apps. Everything is kept only in .env (mode 600) on this VM."
+  explain "A few questions follow: the code-server password, the Cloudflare Tunnel token,
+(optional) hostnames for dev apps, the database and the agent dashboard. Everything is kept only
+in .env (mode 600) on this VM."
   ask_password
   ask_token
   ask_dev_hosts
   ask_database "$([ -f .env ] && [ -z "$(env_get DB_FORWARD)" ] && echo n || echo y)"
+  ask_agents
   local tz=${TZ:-}
   [ -n "$tz" ] || tz=$(timedatectl show -p Timezone --value 2>/dev/null || echo Europe/Berlin)
   umask 077
@@ -480,6 +572,10 @@ write_env() {
     echo "PROXY_DOMAIN='$DEV_PATTERN'"
     echo "DEV_PORTS='$DEV_PORTS_VALUE'"
     echo "DEV_ALLOWED_HOSTS='$DEV_ALLOWED_VALUE'"
+    echo "AGENTS_HOST='$AGENTS_HOST_VALUE'"
+    echo "CODE_SERVER_URL='$CODE_SERVER_URL_VALUE'"
+    echo "CF_ACCESS_TEAM_DOMAIN='$CF_TEAM_VALUE'"
+    echo "CF_ACCESS_AUD='$CF_AUD_VALUE'"
     grep -E '^(CODE_SERVER|CLOUDFLARED|MARIADB)_VERSION=' .env.example
   } > .env.new
   mv .env.new .env
@@ -560,6 +656,28 @@ run_checks() { # read-only verification of the running stack
       esac
     done
   fi
+  "${DOCKER[@]}" exec code-server test -f /etc/claude-code/managed-settings.json \
+    && pass "agent hooks and status line registered (managed settings)" || fail "managed settings missing in code-server (rebuild with ./bootstrap.sh)"
+  "${DOCKER[@]}" exec code-server curl -fsS -m 5 -o /dev/null http://127.0.0.1:8790/healthz \
+    && pass "agent dashboard answers in code-server" || fail "agent dashboard not answering (docker compose logs code-server)"
+  local last_day
+  last_day=$("${DOCKER[@]}" exec -u abc code-server sh -c 'ls /config/.claude/agent-events 2>/dev/null | tail -n1' 2>/dev/null || true)
+  [ -n "$last_day" ] && pass "agent event log: latest ${last_day%.jsonl}" || pass "agent event log: no events yet (start a Claude session)"
+  local ahost aans
+  ahost=$(env_get AGENTS_HOST)
+  if [ -n "$ahost" ]; then
+    { [ -n "$(env_get CF_ACCESS_TEAM_DOMAIN)" ] && [ -n "$(env_get CF_ACCESS_AUD)" ]; } \
+      && pass "agent dashboard checks the Access token" || warn "agent dashboard: team domain or AUD tag missing, tunnel requests are refused (./bootstrap.sh --agents)"
+    aans=$(curl -s -o /dev/null -m 8 -w '%{http_code} %{redirect_url}' "https://$ahost" || true)
+    case "$(dev_host_status "$aans")" in
+      ok) pass "$ahost is set up and behind Cloudflare Access" ;;
+      noaccess) fail "$ahost is reachable WITHOUT Cloudflare Access: add it to your Access application" ;;
+      *) case "$aans" in
+           403\ *) fail "$ahost is reachable WITHOUT Cloudflare Access (the dashboard refused it): add it to your Access application" ;;
+           *) warn "$ahost is not set up in Cloudflare yet (answer: ${aans:-none}): add a Public Hostname to code-server:8790" ;;
+         esac ;;
+    esac
+  fi
   "${DOCKER[@]}" exec -u abc code-server curl -fsS -m 8 -o /dev/null https://github.com >/dev/null 2>&1 \
     && pass "container DNS and internet" || fail "container cannot reach github.com (DNS or egress)"
   "${DOCKER[@]}" exec -u abc code-server sh -c 'claude --version && gh --version && tmux -V && docker ps' >/dev/null 2>&1 \
@@ -627,6 +745,17 @@ if [ "$MODE" = "--db-app" ]; then
   exit 0
 fi
 
+if [ "$MODE" = "--agents" ]; then
+  [ -f .env ] || die ".env not found: run ./bootstrap.sh first"
+  setup_docker_access
+  ask_agents
+  save_agents
+  info "Saved. Restarting code-server so the dashboard picks up the settings"
+  "${DOCKER[@]}" compose up -d
+  print_agents_checklist
+  exit 0
+fi
+
 if [ "$MODE" = "--dev-hosts" ]; then
   [ -f .env ] || die ".env not found: run ./bootstrap.sh first"
   setup_docker_access
@@ -667,6 +796,7 @@ info "Building and starting"
 "${DOCKER[@]}" compose ps
 
 print_dev_checklist
+print_agents_checklist
 
 if grep -q '^TUNNEL_TOKEN=.' .env; then
   echo "Tunnel enabled. Check: ${DOCKER[*]} compose logs --tail=30 cloudflared"

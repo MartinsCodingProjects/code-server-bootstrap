@@ -78,3 +78,16 @@ COPY --from=uv /uv /uvx /usr/local/bin/
 # Docker CLI + Compose talk to the VM's Docker daemon through the mounted socket.
 COPY --from=dockercli /usr/local/bin/docker /usr/local/bin/docker
 COPY --from=dockercli /usr/local/libexec/docker/cli-plugins/docker-compose /usr/local/libexec/docker/cli-plugins/docker-compose
+
+# Agent dashboard (see README, "Agent sessions"): a small Python app with locked
+# dependencies on the image's Python, run as the supervised service svc-agent-dashboard.
+COPY agents/dashboard/pyproject.toml agents/dashboard/uv.lock /opt/agent-dashboard/
+RUN cd /opt/agent-dashboard \
+ && UV_PROJECT_ENVIRONMENT=/opt/agent-dashboard/.venv UV_PYTHON_DOWNLOADS=never \
+    uv sync --frozen --no-dev --no-cache --python /usr/bin/python3
+COPY agents/dashboard/agent_dashboard /opt/agent-dashboard/agent_dashboard
+COPY docker/svc-agent-dashboard /etc/s6-overlay/s6-rc.d/svc-agent-dashboard
+RUN chmod 755 /etc/s6-overlay/s6-rc.d/svc-agent-dashboard/run \
+ && mkdir -p /etc/s6-overlay/s6-rc.d/svc-agent-dashboard/dependencies.d \
+ && touch /etc/s6-overlay/s6-rc.d/svc-agent-dashboard/dependencies.d/init-services \
+ && touch /etc/s6-overlay/s6-rc.d/user/contents.d/svc-agent-dashboard

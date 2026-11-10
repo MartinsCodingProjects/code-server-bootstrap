@@ -100,6 +100,9 @@ vm$ ./bootstrap.sh --reconfigure   # new code-server password and/or tunnel toke
 vm$ ./bootstrap.sh --update        # pull, re-run the new script, refresh .env, rebuild, restart
 vm$ ./bootstrap.sh --check         # health check
 vm$ ./bootstrap.sh --dev-hosts     # change the domain/ports of the dev app hostnames
+vm$ ./bootstrap.sh --agents        # agent dashboard: hostname, IDE URL, Access team domain and AUD tag
+vm$ docker exec code-server s6-svc -r /run/service/svc-agent-dashboard   # restart the agent dashboard
+vm$ docker compose logs --tail=50 code-server | grep -i agent_dashboard  # its log lines
 vm$ ./bootstrap.sh --mariadb       # enable/disable the dev database
 vm$ ./bootstrap.sh --db-app <user>              # new MariaDB user <user> (any name), allowed only on database dev_<user>
 vm$ ./bootstrap.sh --db-app <user> --database   # same, but asks for the database name (any name)
@@ -134,7 +137,12 @@ ct$ agent-stop client-x/webshop              # end Claude and close its tmux ses
 ct$ claude --remote-control my-name          # by hand: one interactive session with Remote Control
 ct$ tail -f ~/.claude/agent-events/$(date -u +%F).jsonl | jq -c '{ts,project,hook_event_name,tool_name,notification_type}'
 ct$ jq '{model: .model.id, ctx: .context_window.used_percentage, limits: .rate_limits}' ~/.claude/agent-state/*.json
+ct$ curl -s localhost:8790/api/overview | jq '.cards[] | {project, status_label, last_summary}'   # dashboard data
+ct$ curl -s 'localhost:8790/api/events?project=client-x&limit=20' | jq -r '.events[] | [.ts, .summary] | @tsv'
 ```
+
+The dashboard itself: `https://agents.<domain>` (Access login), or inside the IDE at
+`https://<ide>/proxy/8790/`.
 
 Dev servers (each in its own terminal tab or tmux window; open `https://<port>-dev.<domain>`):
 
@@ -309,6 +317,8 @@ Answers are remembered in `setup/setup.env` (git-ignored). See
 | A dev app hostname (`5173-dev.<domain>`) shows 401, 503 or a Cloudflare error | `vm$ ./bootstrap.sh --check` | 401: log in at the IDE first; 503/530/no DNS: add the hostname in Cloudflare (Public Hostname, HTTP, `code-server:8443`) and to Access; app not listening: start it on any interface, `ECONNREFUSED` means nothing listens on that port |
 | An agent session does nothing after `agent-start` | `agent-attach <folder>` | Claude waits at the trust question for a new folder, or at a permission prompt: answer it there or in the Claude app |
 | An agent session is missing in the Claude app | `agent-ls`; `agent-attach <folder>` | `exited`: run `agent-start` again; Claude not logged in: run `claude` once and log in |
+| The agent dashboard shows a text starting with "Cloudflare Access is not configured", or "token rejected" | `vm$ ./bootstrap.sh --check` | Set team domain and AUD tag with `./bootstrap.sh --agents`; the AUD tag must be that of the Access application that contains the dashboard hostname |
+| Agent dashboard: 502/530 or a Cloudflare error | `vm$ ./bootstrap.sh --check` | Add the Public Hostname (`code-server:8790`) in the tunnel; check the service: `docker compose logs code-server` |
 | No 5h/7d limits in `~/.claude/agent-state/` | the session has had no answer yet | The limits arrive with the first API response (subscription logins only) |
 | tmux exits immediately in the container | `echo $SHELL` is `/bin/false` | Fixed by `/etc/tmux.conf` in the image; rebuild if missing |
 | `./bootstrap.sh` says permission denied on docker | group not active yet | Log in again, or use `sudo docker` |

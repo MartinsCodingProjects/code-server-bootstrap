@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="de">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Agent Dashboard</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Ccircle cx='8' cy='8' r='6' fill='%23d97757'/%3E%3C/svg%3E">
+  <link rel="stylesheet" href="static/style.css">
+</head>
+<body>
+  <header class="topbar">
+    <button class="menu-toggle" id="menu-toggle" aria-label="Menü" aria-expanded="false">☰</button>
+    <a class="brand" href="#/sessions">Agents</a>
+    <div class="limits" id="limits" aria-label="Nutzungslimits"></div>
+    <span class="live" id="live" title="Live-Verbindung">●</span>
+  </header>
+  <nav class="sidebar" id="sidebar">
+    <a href="#/sessions" data-route="sessions">Sessions</a>
+    <a href="#/history" data-route="history">Verlauf</a>
+    <div class="sidebar-foot" id="user"></div>
+  </nav>
+  <main id="main"></main>
+  <script src="static/app.js"></script>
+</body>
+</html>

@@ -150,6 +150,12 @@ the notebook, SSH to the host and manage the guest there (for example, with
   hook events, status line data and telemetry stay in `config/` on the VM and
   contain commands, file paths and shortened prompts, so treat `config/` as
   private (mode 700).
+- The agent dashboard (port 8790 in code-server, its own hostname) shows that data
+  and will control sessions, which equals access to the code-server terminal. Beyond
+  the Access policy it verifies the Access token itself (team domain and AUD tag in
+  `.env`) and refuses tunnel requests when those are missing, so a gap in the Access
+  configuration does not open it. Its telemetry endpoint accepts only the container
+  itself.
 
 ## Step-by-Step Build Plan
 
