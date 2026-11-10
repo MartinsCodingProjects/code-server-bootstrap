@@ -2,6 +2,7 @@ ARG CODE_SERVER_VERSION=4.140.0-ls368
 ARG DOCKER_CLI_VERSION=29.8.2
 ARG UV_VERSION=0.12.23
 ARG FNM_VERSION=1.38.1
+ARG TTYD_VERSION=1.7.7
 
 FROM docker:${DOCKER_CLI_VERSION}-cli AS dockercli
 
@@ -11,6 +12,7 @@ FROM lscr.io/linuxserver/code-server:${CODE_SERVER_VERSION}
 
 ARG NODE_MAJOR=24
 ARG FNM_VERSION
+ARG TTYD_VERSION
 # Playwright: only the system libraries are installed here (the browsers themselves are
 # downloaded per project by `npx playwright install` into /config, which persists).
 # "chromium firefox webkit" covers all three at roughly 400 MB more.
@@ -36,6 +38,12 @@ RUN apt-get update \
 RUN curl -fsSL https://github.com/Schniz/fnm/releases/download/v${FNM_VERSION}/fnm-linux.zip -o /tmp/fnm.zip \
  && python3 -c 'import zipfile; zipfile.ZipFile("/tmp/fnm.zip").extract("fnm", "/usr/local/bin")' \
  && chmod 755 /usr/local/bin/fnm && rm /tmp/fnm.zip
+
+# ttyd: the agent dashboard's web terminal (a browser view of an agent's tmux session).
+RUN curl -fsSL https://github.com/tsl0922/ttyd/releases/download/${TTYD_VERSION}/ttyd.x86_64 -o /tmp/ttyd.x86_64 \
+ && curl -fsSL https://github.com/tsl0922/ttyd/releases/download/${TTYD_VERSION}/SHA256SUMS -o /tmp/ttyd.sums \
+ && (cd /tmp && grep ' ttyd.x86_64$' ttyd.sums | sha256sum -c -) \
+ && install -m 755 /tmp/ttyd.x86_64 /usr/local/bin/ttyd && rm /tmp/ttyd.x86_64 /tmp/ttyd.sums
 
 # Tools installed without root (pipx, binaries) go to ~/.local/bin; HOME is /config,
 # so they survive rebuilds and are on PATH for every process, agents included.
@@ -87,7 +95,10 @@ RUN cd /opt/agent-dashboard \
     uv sync --frozen --no-dev --no-cache --python /usr/bin/python3
 COPY agents/dashboard/agent_dashboard /opt/agent-dashboard/agent_dashboard
 COPY docker/svc-agent-dashboard /etc/s6-overlay/s6-rc.d/svc-agent-dashboard
-RUN chmod 755 /etc/s6-overlay/s6-rc.d/svc-agent-dashboard/run \
- && mkdir -p /etc/s6-overlay/s6-rc.d/svc-agent-dashboard/dependencies.d \
- && touch /etc/s6-overlay/s6-rc.d/svc-agent-dashboard/dependencies.d/init-services \
- && touch /etc/s6-overlay/s6-rc.d/user/contents.d/svc-agent-dashboard
+COPY docker/svc-agent-term /etc/s6-overlay/s6-rc.d/svc-agent-term
+RUN for svc in svc-agent-dashboard svc-agent-term; do \
+      chmod 755 /etc/s6-overlay/s6-rc.d/$svc/run \
+      && mkdir -p /etc/s6-overlay/s6-rc.d/$svc/dependencies.d \
+      && touch /etc/s6-overlay/s6-rc.d/$svc/dependencies.d/init-services \
+      && touch /etc/s6-overlay/s6-rc.d/user/contents.d/$svc; \
+    done

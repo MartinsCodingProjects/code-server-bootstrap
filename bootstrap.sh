@@ -660,6 +660,8 @@ run_checks() { # read-only verification of the running stack
     && pass "agent hooks and status line registered (managed settings)" || fail "managed settings missing in code-server (rebuild with ./bootstrap.sh)"
   "${DOCKER[@]}" exec code-server curl -fsS -m 5 -o /dev/null http://127.0.0.1:8790/healthz \
     && pass "agent dashboard answers in code-server" || fail "agent dashboard not answering (docker compose logs code-server)"
+  "${DOCKER[@]}" exec code-server curl -fsS -m 5 -o /dev/null http://127.0.0.1:8790/term/ \
+    && pass "agent web terminal (ttyd) answers" || fail "agent web terminal not answering (s6-svc -r /run/service/svc-agent-term)"
   local last_day
   last_day=$("${DOCKER[@]}" exec -u abc code-server sh -c 'ls /config/.claude/agent-events 2>/dev/null | tail -n1' 2>/dev/null || true)
   [ -n "$last_day" ] && pass "agent event log: latest ${last_day%.jsonl}" || pass "agent event log: no events yet (start a Claude session)"

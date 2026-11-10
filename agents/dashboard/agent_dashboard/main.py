@@ -13,13 +13,14 @@ import ipaddress
 import logging
 from contextlib import asynccontextmanager
 from pathlib import Path
+from urllib.parse import urlsplit
 
 import jwt
-from fastapi import FastAPI, HTTPException, Query, Request
+from fastapi import Body, FastAPI, HTTPException, Query, Request, WebSocket
 from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
-from . import config, ingest, live
+from . import config, control, ingest, live, term, usage
 from .events import CATEGORIES, dumps, from_otel_logs, from_otel_metrics
 from .store import Store
 
@@ -52,12 +53,19 @@ class AccessAuth:
         return jwt.decode(token, key, algorithms=["RS256"], audience=self.aud, issuer=f"https://{self.team}")
 
 
-def is_local(request: Request) -> bool:
-    host = request.client.host if request.client else ""
+def is_local(conn: Request | WebSocket) -> bool:
+    host = conn.client.host if conn.client else ""
     try:
         return ipaddress.ip_address(host).is_loopback
     except ValueError:
         return host == "testclient"
+
+
+def same_origin(conn: Request | WebSocket) -> bool:
+    """Browsers send Origin on cross-site requests; it must name this host (CSRF, and
+    cross-site WebSocket hijacking of the terminal)."""
+    origin = conn.headers.get("origin")
+    return not origin or urlsplit(origin).netloc == conn.headers.get("host")
 
 
 def create_app(cfg: config.Config | None = None) -> FastAPI:
@@ -90,6 +98,23 @@ def create_app(cfg: config.Config | None = None) -> FastAPI:
     app = FastAPI(title="Agent dashboard", lifespan=lifespan, docs_url=None, redoc_url=None)
     app.state.store, app.state.cfg, app.state.hub = store, cfg, hub
 
+    async def authorize(conn: Request | WebSocket) -> str | None:
+        """None if the request may pass, else the reason. Sets conn.state.user."""
+        if auth is None:
+            if not is_local(conn):
+                return ("Cloudflare Access is not configured for the dashboard (CF_ACCESS_TEAM_DOMAIN, "
+                        "CF_ACCESS_AUD; ./bootstrap.sh --agents), so only local requests are allowed.")
+            return None
+        token = conn.headers.get("cf-access-jwt-assertion") or conn.cookies.get("CF_Authorization")
+        if not token:
+            return "no Cloudflare Access token: open the dashboard through its hostname"
+        try:
+            conn.state.user = (await asyncio.to_thread(auth.verify, token)).get("email")
+        except Exception as exc:  # invalid, expired, wrong audience, keys unreachable
+            log.warning("Access token rejected: %s", exc)
+            return "Cloudflare Access token rejected"
+        return None
+
     @app.middleware("http")
     async def guard(request: Request, call_next):
         path = request.url.path
@@ -99,20 +124,12 @@ def create_app(cfg: config.Config | None = None) -> FastAPI:
             if not is_local(request):
                 return PlainTextResponse("telemetry is accepted from this container only", 403)
             return await call_next(request)
-        if auth is None:
-            if not is_local(request):
-                return PlainTextResponse(
-                    "Cloudflare Access is not configured for the dashboard (CF_ACCESS_TEAM_DOMAIN, "
-                    "CF_ACCESS_AUD; ./bootstrap.sh --agents), so only local requests are allowed.", 403)
-            return await call_next(request)
-        token = request.headers.get("cf-access-jwt-assertion") or request.cookies.get("CF_Authorization")
-        if not token:
-            return PlainTextResponse("no Cloudflare Access token: open the dashboard through its hostname", 403)
-        try:
-            request.state.user = (await asyncio.to_thread(auth.verify, token)).get("email")
-        except Exception as exc:  # invalid, expired, wrong audience, keys unreachable
-            log.warning("Access token rejected: %s", exc)
-            return PlainTextResponse("Cloudflare Access token rejected", 403)
+        reason = await authorize(request)
+        if reason:
+            return PlainTextResponse(reason, 403)
+        if request.method not in ("GET", "HEAD") and (
+                not same_origin(request) or request.headers.get("x-agent-dashboard") != "1"):
+            return PlainTextResponse("cross-site request refused", 403)
         return await call_next(request)
 
     @app.get("/healthz")
@@ -192,6 +209,7 @@ def create_app(cfg: config.Config | None = None) -> FastAPI:
         return {
             "projects": store.projects(),
             "categories": CATEGORIES,
+            "status_labels": live.CARD_STATUS_LABELS,
             "user": getattr(request.state, "user", None),
             "code_server_url": cfg.code_server_url or None,
         }
@@ -215,6 +233,62 @@ def create_app(cfg: config.Config | None = None) -> FastAPI:
 
         return StreamingResponse(gen(), media_type="text/event-stream",
                                  headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
+
+    # --- usage and session detail ---------------------------------------------------------------
+
+    @app.get("/api/usage")
+    async def api_usage(days: int = Query(7, ge=1, le=366), project: str = ""):
+        return await asyncio.to_thread(usage.usage, store, cfg, days, project or None)
+
+    @app.get("/api/session/{session_id}")
+    async def api_session(session_id: str):
+        d = await asyncio.to_thread(usage.session_detail, store, cfg, session_id)
+        if not d:
+            raise HTTPException(404)
+        return d
+
+    @app.get("/api/session/{session_id}/transcript")
+    async def api_transcript(session_id: str, limit: int = Query(400, ge=1, le=5000)):
+        t = await asyncio.to_thread(usage.transcript, store, cfg, session_id, limit)
+        if not t:
+            raise HTTPException(404, "no transcript for this session")
+        return t
+
+    # --- control (Session Config page, card buttons) --------------------------------------------
+
+    @app.get("/api/folders")
+    async def api_folders():
+        sel = live.selection(cfg)
+        return {"folders": await asyncio.to_thread(control.folders, cfg, sel), "selection": sel,
+                "projects_dir": str(cfg.projects_dir)}
+
+    @app.put("/api/selection")
+    async def api_selection(folders: list[str] = Body(..., embed=True)):
+        return {"selection": control.save_selection(cfg, folders)}
+
+    @app.post("/api/sessions/start")
+    async def api_start(folders: list[str] = Body(..., embed=True), resume: bool = Body(False, embed=True)):
+        results = [await asyncio.to_thread(control.start, cfg, f, resume) for f in folders]
+        return {"results": results}
+
+    @app.post("/api/sessions/stop")
+    async def api_stop(folder: str = Body(..., embed=True)):
+        return await asyncio.to_thread(control.stop, cfg, folder)
+
+    # --- web terminal: ttyd on 127.0.0.1:7681 behind this app's checks ------------------------
+
+    @app.get("/term/{path:path}")
+    async def term_http(path: str, request: Request):
+        return await term.forward_http(request)
+
+    @app.websocket("/term/ws")
+    async def term_ws(ws: WebSocket):
+        reason = await authorize(ws)
+        if reason or not same_origin(ws):
+            log.warning("terminal refused: %s", reason or "foreign origin")
+            await ws.close(code=1008)
+            return
+        await term.forward_ws(ws)
 
     # --- pages --------------------------------------------------------------------------------
 

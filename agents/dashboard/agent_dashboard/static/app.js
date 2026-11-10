@@ -25,6 +25,40 @@ async function api(path) {
   return r.json();
 }
 
+// Changes need the X-Agent-Dashboard header (the server refuses cross-site requests without it).
+async function send(method, path, body) {
+  const r = await fetch(path, {
+    method, credentials: "same-origin", body: JSON.stringify(body),
+    headers: { "Content-Type": "application/json", "X-Agent-Dashboard": "1" },
+  });
+  if (!r.ok) throw new Error(`${r.status} ${await r.text()}`);
+  return r.json();
+}
+
+function toast(text, bad = false) {
+  const el = h("div", { class: "toast" + (bad ? " bad" : "") }, text);
+  document.body.append(el);
+  setTimeout(() => el.remove(), bad ? 9000 : 4000);
+}
+
+async function startSessions(folders, resume = false) {
+  const res = await send("POST", "api/sessions/start", { folders, resume });
+  const failed = res.results.filter((r) => !r.ok);
+  if (failed.length) toast(failed.map((r) => `${r.folder}: ${r.output}`).join("\n"), true);
+  else toast(res.results.map((r) => r.output).join("\n"));
+  scheduleOverview(300);
+  return res;
+}
+
+async function stopSession(folder) {
+  if (!confirm(`Claude in „${folder}“ beenden? Das Gespräch lässt sich später fortsetzen.`)) return;
+  const r = await send("POST", "api/sessions/stop", { folder });
+  toast(r.output || "gestoppt", !r.ok);
+  scheduleOverview(300);
+}
+
+const termUrl = (name) => `term/?arg=${encodeURIComponent(name)}`;
+
 const fmtTime = (ts) => new Date(ts).toLocaleTimeString("de-DE", { hour: "2-digit", minute: "2-digit", second: "2-digit" });
 const fmtDay = (ts) => new Date(ts).toLocaleDateString("de-DE", { weekday: "long", day: "2-digit", month: "2-digit", year: "numeric" });
 const fmtClock = (epoch) => new Date(epoch * 1000).toLocaleString("de-DE", { weekday: "short", hour: "2-digit", minute: "2-digit" });
@@ -122,10 +156,25 @@ function card(c) {
       c.tmux ? [h("dt", {}, "tmux"), h("dd", {}, `seit ${fmtTime(c.tmux.started)}` +
         (c.tmux.attached ? ` · ${c.tmux.attached} Terminal(s) verbunden` : ""))] : null),
     c.last_summary ? h("div", { class: "last" }, c.last_summary, " ", h("span", { class: "muted" }, ago(c.last_ts))) : null,
-    h("div", { class: "actions" },
-      h("a", { href: histLink }, "Verlauf"),
-      c.code_server_url ? h("a", { href: c.code_server_url, target: "_blank", rel: "noopener" }, "code-server") : null,
-      c.tmux ? h("a", { href: "https://claude.ai/code", target: "_blank", rel: "noopener", title: `Session „${c.name}“` }, "Claude") : null));
+    h("div", { class: "actions" }, cardActions(c, histLink)));
+}
+
+function cardActions(c, histLink) {
+  const live = c.tmux && c.status !== "exited";
+  const act = (label, fn, cls = "") => h("button", { class: cls, onclick: (ev) => {
+    ev.target.disabled = true;
+    fn().catch(showError).finally(() => { ev.target.disabled = false; });
+  } }, label);
+  return [
+    live ? h("a", { href: termUrl(c.name), target: "_blank", rel: "noopener", class: "primary" }, "Terminal") : null,
+    !live && c.exists ? act("Starten", () => startSessions([c.project]), "primary") : null,
+    !live && c.exists && c.session_id ? act("Fortsetzen", () => startSessions([c.project], true)) : null,
+    c.tmux ? act(c.status === "exited" ? "Schließen" : "Stoppen", () => stopSession(c.project), "danger") : null,
+    h("a", { href: histLink }, "Verlauf"),
+    c.session_id ? h("a", { href: `#/session/${encodeURIComponent(c.session_id)}` }, "Details") : null,
+    c.code_server_url ? h("a", { href: c.code_server_url, target: "_blank", rel: "noopener" }, "code-server") : null,
+    c.tmux ? h("a", { href: "https://claude.ai/code", target: "_blank", rel: "noopener", title: `Session „${c.name}“` }, "Claude") : null,
+  ];
 }
 
 function renderSessions() {
@@ -285,6 +334,361 @@ function renderHistory() {
   loadHistory().catch(showError);
 }
 
+// --------------------------------------------------------------------------------- session config
+
+const cfgPage = { folders: [], open: new Set(), filter: "" };
+
+async function renderConfig() {
+  main.replaceChildren(h("h1", {}, "Session Config"), h("p", { class: "muted" }, "Lädt …"));
+  const res = await api("api/folders");
+  cfgPage.folders = res.folders;
+  cfgPage.root = res.projects_dir;
+  // Folders that are no repository usually hold projects: open them; repositories stay closed
+  // unless something inside is selected.
+  cfgPage.open = new Set(res.folders.filter((f) => f.depth === 1 && (!f.git ||
+    res.folders.some((c) => c.depth === 2 && c.rel.startsWith(f.rel + "/") && c.selected))).map((f) => f.rel));
+  drawConfig();
+}
+
+function drawConfig() {
+  const sel = () => cfgPage.folders.filter((f) => f.selected).map((f) => f.rel);
+  const filter = h("input", { type: "search", placeholder: "Ordner filtern …", value: cfgPage.filter });
+  filter.addEventListener("input", () => { cfgPage.filter = filter.value; drawList(); });
+  const count = h("span", { class: "muted" });
+  const save = h("button", { onclick: async () => {
+    await send("PUT", "api/selection", { folders: sel() });
+    toast("Auswahl gespeichert");
+    scheduleOverview(0);
+  } }, "Auswahl speichern");
+  const start = h("button", { class: "primary", onclick: async () => {
+    const folders = sel();
+    await send("PUT", "api/selection", { folders });
+    const todo = cfgPage.folders.filter((f) => f.selected && !f.running).map((f) => f.rel);
+    if (!todo.length) return toast("Alle ausgewählten Ordner laufen schon.");
+    start.disabled = true;
+    try { await startSessions(todo); } finally { start.disabled = false; }
+    renderConfig();
+  } }, "Ausgewählte starten");
+  const list = h("div", { class: "tree" });
+
+  function updateCount() {
+    const n = sel().length;
+    count.textContent = n ? `${n} ausgewählt` : "nichts ausgewählt";
+  }
+  function drawList() {
+    const q = cfgPage.filter.toLowerCase();
+    list.replaceChildren();
+    for (const f of cfgPage.folders) {
+      const parent = f.depth === 2 ? f.rel.slice(0, f.rel.indexOf("/")) : null;
+      if (q ? !f.rel.toLowerCase().includes(q) : parent && !cfgPage.open.has(parent)) continue;
+      const box = h("input", { type: "checkbox", checked: f.selected, id: "f-" + f.rel });
+      box.addEventListener("change", () => { f.selected = box.checked; updateCount(); });
+      const toggle = f.depth === 1 && f.children
+        ? h("button", { class: "twisty", "aria-label": "Unterordner", onclick: () => {
+            cfgPage.open.has(f.rel) ? cfgPage.open.delete(f.rel) : cfgPage.open.add(f.rel);
+            drawList();
+          } }, cfgPage.open.has(f.rel) ? "▾" : "▸")
+        : h("span", { class: "twisty" });
+      list.append(h("div", { class: `row d${f.depth}` },
+        toggle, box,
+        h("label", { for: "f-" + f.rel }, q ? f.rel : f.name),
+        f.git ? h("span", { class: "tag" }, "git") : null,
+        f.running ? h("span", { class: "pill working" }, "läuft") : null,
+        f.exited ? h("span", { class: "pill" }, "beendet") : null,
+        f.depth === 1 && f.children ? h("span", { class: "muted small" }, `${f.children} Unterordner`) : null));
+    }
+    if (!list.children.length) list.append(h("div", { class: "empty", style: "border:0" }, "Keine Ordner."));
+  }
+
+  main.replaceChildren(
+    h("h1", {}, "Session Config"),
+    h("p", { class: "muted" }, "Wähle die Ordner, an denen gerade gearbeitet wird (bis zwei Ebenen unter ",
+      h("code", {}, cfgPage.root), "). „Ausgewählte starten“ startet für jeden Ordner, der noch nicht läuft, Claude mit Remote Control in einer eigenen tmux-Session."),
+    h("div", { class: "filters" }, filter, count, save, start),
+    list);
+  updateCount();
+  drawList();
+}
+
+// ----------------------------------------------------------------------------------------- charts
+// Plain SVG, sized to the container; hover shows a tooltip (bars: per day, lines: crosshair).
+
+const NS = "http://www.w3.org/2000/svg";
+const SLOTS = ["--s1", "--s2", "--s3", "--s4", "--s5", "--s6", "--s7"];
+const OTHER = "--s8";
+const cssVar = (name) => getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+
+function svg(tag, attrs = {}) {
+  const el = document.createElementNS(NS, tag);
+  for (const [k, v] of Object.entries(attrs)) el.setAttribute(k, v);
+  return el;
+}
+function niceMax(v) {
+  if (!(v > 0)) return 1;
+  const p = 10 ** Math.floor(Math.log10(v));
+  return [1, 2, 4, 6, 8, 10].map((m) => m * p).find((m) => m >= v);
+}
+function legend(series) {
+  return h("div", { class: "legend" }, series.map((s) => h("span", {}, h("i", { style: `background:var(${s.color})` }), s.label)));
+}
+function tipBox(chart) {
+  const tip = h("div", { class: "tip", hidden: true });
+  chart.append(tip);
+  return (x, y, content) => {
+    if (!content) { tip.hidden = true; return; }
+    tip.replaceChildren(...content);
+    tip.hidden = false;
+    const w = chart.clientWidth;
+    tip.style.left = Math.min(Math.max(0, x + 12), w - tip.offsetWidth) + "px";
+    tip.style.top = Math.max(0, y - tip.offsetHeight - 8) + "px";
+  };
+}
+const tipRow = (color, label, value) => h("div", { class: "row" },
+  h("span", {}, color ? h("i", { style: `background:var(${color})` }) : null, " ", label), h("span", {}, value));
+
+// days: ["YYYY-MM-DD"], series: [{label, color, values: {day: number}}]
+function stackedBars(el, days, series, fmt, height = 220) {
+  const chart = h("div", { class: "chart" });
+  el.replaceChildren(legend(series), chart);
+  const draw = () => {
+    chart.replaceChildren();
+    const W = chart.clientWidth || 600, H = height, L = 46, B = 22, T = 6;
+    const totals = days.map((d) => series.reduce((a, s) => a + (s.values[d] || 0), 0));
+    const max = niceMax(Math.max(...totals));
+    const y = (v) => T + (H - T - B) * (1 - v / max);
+    const band = (W - L) / days.length, bw = Math.min(36, band * 0.62);
+    const root = svg("svg", { viewBox: `0 0 ${W} ${H}`, height: H, role: "img" });
+    for (let i = 0; i <= 4; i++) {
+      const v = (max / 4) * i;
+      root.append(svg("line", { class: "gridline", x1: L, x2: W, y1: y(v), y2: y(v) }));
+      const t = svg("text", { x: L - 6, y: y(v) + 4, "text-anchor": "end" }); t.textContent = fmt(v); root.append(t);
+    }
+    const every = Math.ceil(days.length / Math.max(1, Math.floor((W - L) / 64)));
+    const show = tipBox(chart);
+    days.forEach((d, i) => {
+      const x = L + band * i + (band - bw) / 2;
+      let acc = 0;
+      const segs = series.filter((s) => s.values[d] > 0);
+      segs.forEach((s, j) => {
+        const v = s.values[d], y0 = y(acc), y1 = y(acc + v);
+        acc += v;
+        const top = j === segs.length - 1, hgt = Math.max(0, y0 - y1 - (j ? 2 : 0));
+        const r = top ? Math.min(4, hgt, bw / 2) : 0;
+        const yy = y1, x2 = x + bw, yb = yy + hgt;
+        root.append(svg("path", { fill: `var(${s.color})`, d: r
+          ? `M${x},${yb}V${yy + r}Q${x},${yy} ${x + r},${yy}H${x2 - r}Q${x2},${yy} ${x2},${yy + r}V${yb}Z`
+          : `M${x},${yb}V${yy}H${x2}V${yb}Z` }));
+      });
+      if (i % every === 0 || i === days.length - 1) {
+        const t = svg("text", { x: x + bw / 2, y: H - 6, "text-anchor": "middle" });
+        t.textContent = new Date(d + "T12:00").toLocaleDateString("de-DE", { day: "2-digit", month: "2-digit" });
+        root.append(t);
+      }
+      const hit = svg("rect", { class: "hit", x: L + band * i, y: T, width: band, height: H - T - B });
+      const tip = () => [h("b", {}, new Date(d + "T12:00").toLocaleDateString("de-DE", { weekday: "short", day: "2-digit", month: "2-digit" })),
+        ...series.filter((s) => s.values[d]).map((s) => tipRow(s.color, s.label, fmt(s.values[d]))),
+        tipRow(null, "Summe", fmt(totals[i]))];
+      hit.addEventListener("pointermove", () => show(L + band * i + band / 2, y(totals[i]), tip()));
+      hit.addEventListener("pointerleave", () => show());
+      root.append(hit);
+    });
+    chart.append(root);
+  };
+  draw();
+  onResize(chart, draw);
+}
+
+// points: [{ts, <key>: number}], series: [{key, label, color}], y fixed 0..yMax
+function lineChart(el, points, series, fmt, yMax = 100, height = 200) {
+  const chart = h("div", { class: "chart" });
+  el.replaceChildren(series.length > 1 ? legend(series) : "", chart);
+  const draw = () => {
+    chart.replaceChildren();
+    if (!points.length) { chart.append(h("p", { class: "muted" }, "Noch keine Daten.")); return; }
+    const W = chart.clientWidth || 600, H = height, L = 40, B = 22, T = 6, R = 8;
+    const t0 = new Date(points[0].ts).getTime(), t1 = Math.max(t0 + 60000, new Date(points[points.length - 1].ts).getTime());
+    const x = (ts) => L + (W - L - R) * (new Date(ts).getTime() - t0) / (t1 - t0);
+    const y = (v) => T + (H - T - B) * (1 - v / yMax);
+    const root = svg("svg", { viewBox: `0 0 ${W} ${H}`, height: H, role: "img" });
+    for (let i = 0; i <= 4; i++) {
+      const v = (yMax / 4) * i;
+      root.append(svg("line", { class: "gridline", x1: L, x2: W - R, y1: y(v), y2: y(v) }));
+      const t = svg("text", { x: L - 6, y: y(v) + 4, "text-anchor": "end" }); t.textContent = fmt(v); root.append(t);
+    }
+    const spanDays = (t1 - t0) / 86400000;
+    for (let i = 0; i <= 4; i++) {
+      const ts = t0 + (t1 - t0) * i / 4;
+      const t = svg("text", { x: L + (W - L - R) * i / 4, y: H - 6, "text-anchor": i === 0 ? "start" : i === 4 ? "end" : "middle" });
+      t.textContent = new Date(ts).toLocaleString("de-DE", spanDays > 2
+        ? { day: "2-digit", month: "2-digit" } : { hour: "2-digit", minute: "2-digit" });
+      root.append(t);
+    }
+    for (const s of series) {
+      const pts = points.filter((p) => p[s.key] != null);
+      if (!pts.length) continue;
+      root.append(svg("polyline", { fill: "none", stroke: `var(${s.color})`, "stroke-width": 2, "stroke-linejoin": "round",
+        points: pts.map((p) => `${x(p.ts).toFixed(1)},${y(Math.min(yMax, p[s.key])).toFixed(1)}`).join(" ") }));
+    }
+    const cross = svg("line", { class: "cross", y1: T, y2: H - B, visibility: "hidden" });
+    const dots = series.map((s) => svg("circle", { r: 4, fill: `var(${s.color})`, stroke: "var(--surface)", "stroke-width": 2, visibility: "hidden" }));
+    root.append(cross, ...dots);
+    const show = tipBox(chart);
+    const hit = svg("rect", { class: "hit", x: L, y: T, width: W - L - R, height: H - T - B });
+    hit.addEventListener("pointermove", (ev) => {
+      const box = root.getBoundingClientRect();
+      const px = (ev.clientX - box.left) * (W / box.width);
+      let best = points[0];
+      for (const p of points) if (Math.abs(x(p.ts) - px) < Math.abs(x(best.ts) - px)) best = p;
+      const bx = x(best.ts);
+      cross.setAttribute("x1", bx); cross.setAttribute("x2", bx); cross.setAttribute("visibility", "visible");
+      series.forEach((s, i) => {
+        const v = best[s.key];
+        dots[i].setAttribute("visibility", v == null ? "hidden" : "visible");
+        if (v != null) { dots[i].setAttribute("cx", bx); dots[i].setAttribute("cy", y(Math.min(yMax, v))); }
+      });
+      show(bx, y(Math.max(...series.map((s) => best[s.key] ?? 0))),
+        [h("b", {}, new Date(best.ts).toLocaleString("de-DE", { weekday: "short", hour: "2-digit", minute: "2-digit" })),
+          ...series.filter((s) => best[s.key] != null).map((s) => tipRow(s.color, s.label, fmt(best[s.key])))]);
+    });
+    hit.addEventListener("pointerleave", () => {
+      cross.setAttribute("visibility", "hidden"); dots.forEach((d) => d.setAttribute("visibility", "hidden")); show();
+    });
+    root.append(hit);
+    chart.append(root);
+  };
+  draw();
+  onResize(chart, draw);
+}
+
+function onResize(el, fn) {
+  let w = el.clientWidth;
+  const ro = new ResizeObserver(() => { if (Math.abs(el.clientWidth - w) > 4) { w = el.clientWidth; fn(); } });
+  ro.observe(el);
+}
+
+const tile = (label, value, sub) => h("div", { class: "tile" },
+  h("div", { class: "label" }, label), h("div", { class: "value" }, value), sub ? h("div", { class: "sub" }, sub) : null);
+const fmtHours = (s) => s == null ? "–" : s < 3600 ? `${Math.round(s / 60)} min` : `${(s / 3600).toFixed(1)} h`;
+const pct = (v) => `${Math.round(v)} %`;
+
+// ------------------------------------------------------------------------------------------ usage
+
+async function renderUsage() {
+  const params = parseHash().params;
+  const days = Number(params.get("days") || 7), project = params.get("project") || "", measure = params.get("m") || "tokens";
+  const set = (k, v) => { if (v) params.set(k, v); else params.delete(k); setParams(params); renderUsage().catch(showError); };
+
+  main.replaceChildren(h("h1", {}, "Verbrauch"), h("p", { class: "muted" }, "Lädt …"));
+  const u = await api(`api/usage?${new URLSearchParams({ days, project })}`);
+  const t = u.totals;
+
+  const range = h("select", { "aria-label": "Zeitraum" }, [7, 14, 30, 90].map((d) =>
+    h("option", { value: d, selected: d === days }, `${d} Tage`)));
+  range.addEventListener("change", () => set("days", range.value));
+  const proj = h("select", { "aria-label": "Projekt" }, h("option", { value: "" }, "Alle Projekte"),
+    state.meta.projects.map((p) => h("option", { value: p, selected: p === project }, p)));
+  proj.addEventListener("change", () => set("project", proj.value));
+  const seg = h("div", { class: "seg" }, [["tokens", "Tokens"], ["cost", "Kosten"]].map(([k, l]) =>
+    h("button", { class: k === measure ? "on" : "", onclick: () => set("m", k === "tokens" ? "" : k) }, l)));
+
+  // up to seven projects keep their own color, the rest is "Andere"
+  const top = u.projects.slice(0, 7), rest = u.projects.slice(7);
+  const series = top.map((p, i) => ({ label: p, color: SLOTS[i], values: {} }));
+  if (rest.length) series.push({ label: `Andere (${rest.length})`, color: OTHER, values: {} });
+  for (const d of u.days) {
+    for (const [p, v] of Object.entries(u.per_day[d] || {})) {
+      const s = series[top.indexOf(p)] || series[series.length - 1];
+      if (s) s.values[d] = (s.values[d] || 0) + v[measure];
+    }
+  }
+  const fmtM = measure === "cost" ? (v) => (v >= 10 ? v.toFixed(0) : v.toFixed(2)) + " $" : fmtNum;
+
+  const barsEl = h("div"), limitsEl = h("div");
+  const hasData = u.projects.length > 0;
+  main.replaceChildren(
+    h("h1", {}, "Verbrauch"),
+    h("div", { class: "filters" }, range, proj, seg),
+    h("div", { class: "tiles" },
+      tile("Tokens", fmtNum(t.tokens), t.tokens ? `ein ${fmtNum(t.tokens_input)} · aus ${fmtNum(t.tokens_output)} · Cache ${fmtNum((t.tokens_cacheRead || 0) + (t.tokens_cacheCreation || 0))}` : null),
+      tile("Kosten (Schätzung)", fmtUsd(t.cost), "zum Listenpreis; im Abo nicht berechnet"),
+      tile("Agent aktiv", fmtHours(t.active_agent_s), `du aktiv: ${fmtHours(t.active_user_s)}`),
+      tile("Wartezeit auf Freigaben", fmtHours((t.wait_ms || 0) / 1000), `${t.waits || 0} Freigaben`),
+      tile("Zeilen", `+${fmtNum(t.lines_added || 0)} / −${fmtNum(t.lines_removed || 0)}`, `${t.commits || 0} Commits · ${t.pull_requests || 0} PRs`),
+      tile("API-Anfragen", fmtNum(t.api_requests || 0), `${t.api_errors || 0} Fehler · Median ${t.api_ms_median != null ? (t.api_ms_median / 1000).toFixed(1) + " s" : "–"}`),
+      tile("Cache-Trefferquote", t.cache_hit_ratio != null ? pct(t.cache_hit_ratio * 100) : "–")),
+    h("section", { class: "panel" }, h("h2", {}, measure === "cost" ? "Kosten pro Tag" : "Tokens pro Tag"),
+      h("p", { class: "note" }, "Aus der Telemetrie der Agent-Sessions (agent-start), nach Projekt."), barsEl),
+    h("section", { class: "panel" }, h("h2", {}, "Nutzungslimits"),
+      h("p", { class: "note" }, "Anteil des 5-Stunden- und des 7-Tage-Fensters, aus der Statuszeile."), limitsEl),
+    h("section", { class: "panel" }, h("h2", {}, "Nach Projekt"), projectTable(u)));
+  if (hasData) stackedBars(barsEl, u.days, series, fmtM);
+  else barsEl.append(h("p", { class: "muted" }, "Noch keine Telemetrie in diesem Zeitraum."));
+  lineChart(limitsEl, u.limits, [{ key: "five_hour", label: "5 Stunden", color: "--s1" }, { key: "seven_day", label: "7 Tage", color: "--s2" }], pct);
+}
+
+function projectTable(u) {
+  if (!u.projects.length) return h("p", { class: "muted" }, "Keine Daten.");
+  const cols = [["tokens", "Tokens", fmtNum], ["cost", "Kosten", fmtUsd], ["active_agent_s", "Agent aktiv", fmtHours],
+    ["wait_ms", "Wartezeit", (v) => fmtHours(v / 1000)], ["lines_added", "+Zeilen", fmtNum], ["commits", "Commits", (v) => String(v)],
+    ["api_errors", "API-Fehler", (v) => String(v)]];
+  return h("div", { class: "table-wrap" }, h("table", { class: "data" },
+    h("thead", {}, h("tr", {}, h("th", {}, "Projekt"), cols.map(([, l]) => h("th", {}, l)))),
+    h("tbody", {}, u.projects.map((p) => h("tr", {},
+      h("td", {}, h("a", { href: `#/history?project=${encodeURIComponent(p)}` }, p)),
+      cols.map(([k, , f]) => h("td", {}, u.per_project[p][k] ? f(u.per_project[p][k]) : "–")))))));
+}
+
+// --------------------------------------------------------------------------------- session detail
+
+async function renderSession(id) {
+  main.replaceChildren(h("h1", {}, "Session"), h("p", { class: "muted" }, "Lädt …"));
+  const d = await api(`api/session/${encodeURIComponent(id)}`);
+  const s = d.session, snap = d.snapshot || {}, m = _snap(snap);
+  const allCats = Object.keys(state.meta.categories).join(",");
+  const chartEl = h("div"), trEl = h("div");
+  const loadTranscript = async () => {
+    trEl.replaceChildren(h("p", { class: "muted" }, "Lädt …"));
+    try {
+      const t = await api(`api/session/${encodeURIComponent(id)}/transcript`);
+      trEl.replaceChildren(
+        t.total > t.items.length ? h("p", { class: "note" }, `Die letzten ${t.items.length} von ${t.total} Einträgen.`) : "",
+        h("div", { class: "transcript" }, t.items.map((it) => h("div", { class: `msg ${it.kind === "text" ? it.role : it.kind}${it.error ? " err" : ""}` },
+          it.ts ? h("time", {}, fmtTime(it.ts)) : null,
+          it.kind === "tool" ? `${it.tool}${it.text ? ": " + it.text : ""}` : it.text))));
+    } catch (err) { trEl.replaceChildren(h("p", { class: "muted" }, "Kein Transkript verfügbar.")); }
+  };
+  const tok = d.tokens || {};
+  main.replaceChildren(
+    h("p", {}, h("a", { href: "#/sessions" }, "← Sessions")),
+    h("h1", {}, s.project || "ohne Projekt", " ", h("span", { class: "muted", style: "font-weight:400" }, m.session_name || "")),
+    h("div", { class: "filters" },
+      h("span", { class: `pill ${s.status}` }, state.meta.status_labels[s.status] || s.status),
+      h("span", { class: "muted small" }, `Session ${s.session_id} · ${fmtDay(s.first_ts)} ${fmtTime(s.first_ts)} bis ${fmtTime(s.last_ts)}`)),
+    h("div", { class: "tiles" },
+      tile("Modell", m.model || "–", m.effort ? `Effort ${m.effort}` : null),
+      tile("Kontext", m.context_pct != null ? pct(m.context_pct) : "–", m.context_tokens ? `${fmtNum(m.context_tokens)} von ${fmtNum(m.context_size)}` : null),
+      tile("Kosten (Schätzung)", fmtUsd(m.cost_usd), m.duration_ms ? `Dauer ${fmtDur(m.duration_ms)}` : null),
+      tile("Tokens", fmtNum(Object.values(tok).reduce((a, b) => a + b, 0) || null), tok.input ? `ein ${fmtNum(tok.input)} · aus ${fmtNum(tok.output)}` : "nur mit Telemetrie"),
+      tile("Ereignisse", fmtNum(Object.values(d.counts).reduce((a, b) => a + b, 0)),
+        Object.entries(d.counts).map(([k, n]) => `${state.meta.categories[k] || k} ${n}`).join(" · "))),
+    h("section", { class: "panel" }, h("h2", {}, "Kontext über die Zeit"), chartEl),
+    h("div", { class: "actions", style: "margin-bottom:16px" },
+      h("a", { href: `#/history?session=${encodeURIComponent(id)}&cat=${allCats}` }, "Alle Ereignisse dieser Session"),
+      h("button", { onclick: loadTranscript }, "Gespräch anzeigen")),
+    h("section", { class: "panel" }, h("h2", {}, "Gespräch"), trEl));
+  trEl.append(h("p", { class: "note" }, "Das Transkript wird erst auf Wunsch geladen."));
+  lineChart(chartEl, d.series, [{ key: "context_pct", label: "Kontext", color: "--s1" }], pct);
+}
+
+function _snap(snap) {
+  const cw = snap.context_window || {}, cost = snap.cost || {};
+  return {
+    model: (snap.model || {}).display_name, effort: (snap.effort || {}).level, session_name: snap.session_name,
+    context_pct: cw.used_percentage, context_tokens: (cw.total_input_tokens || 0) + (cw.total_output_tokens || 0),
+    context_size: cw.context_window_size, cost_usd: cost.total_cost_usd, duration_ms: cost.total_duration_ms,
+  };
+}
+
 // ----------------------------------------------------------------------------------------- router
 
 function showError(err) {
@@ -298,6 +702,12 @@ function route() {
   for (const a of document.querySelectorAll(".sidebar a")) a.classList.toggle("active", a.dataset.route === route);
   $("#sidebar").classList.remove("open");
   if (route === "history") renderHistory();
+  else if (route === "config") renderConfig().catch(showError);
+  else if (route === "usage") renderUsage().catch(showError);
+  else if (route.startsWith("session/")) {
+    state.route = "session";
+    renderSession(decodeURIComponent(route.slice(8))).catch(showError);
+  }
   else { state.route = "sessions"; renderSessions(); }
 }
 

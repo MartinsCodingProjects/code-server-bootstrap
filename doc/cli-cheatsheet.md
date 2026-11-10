@@ -102,6 +102,7 @@ vm$ ./bootstrap.sh --check         # health check
 vm$ ./bootstrap.sh --dev-hosts     # change the domain/ports of the dev app hostnames
 vm$ ./bootstrap.sh --agents        # agent dashboard: hostname, IDE URL, Access team domain and AUD tag
 vm$ docker exec code-server s6-svc -r /run/service/svc-agent-dashboard   # restart the agent dashboard
+vm$ docker exec code-server s6-svc -r /run/service/svc-agent-term        # restart its web terminal (ttyd)
 vm$ docker compose logs --tail=50 code-server | grep -i agent_dashboard  # its log lines
 vm$ ./bootstrap.sh --mariadb       # enable/disable the dev database
 vm$ ./bootstrap.sh --db-app <user>              # new MariaDB user <user> (any name), allowed only on database dev_<user>
@@ -318,6 +319,8 @@ Answers are remembered in `setup/setup.env` (git-ignored). See
 | An agent session does nothing after `agent-start` | `agent-attach <folder>` | Claude waits at the trust question for a new folder, or at a permission prompt: answer it there or in the Claude app |
 | An agent session is missing in the Claude app | `agent-ls`; `agent-attach <folder>` | `exited`: run `agent-start` again; Claude not logged in: run `claude` once and log in |
 | The agent dashboard shows a text starting with "Cloudflare Access is not configured", or "token rejected" | `vm$ ./bootstrap.sh --check` | Set team domain and AUD tag with `./bootstrap.sh --agents`; the AUD tag must be that of the Access application that contains the dashboard hostname |
+| Dashboard terminal stays black or says the terminal is not running | `ct$ agent-ls`; `vm$ ./bootstrap.sh --check` | The session must be running (Start on its card); restart ttyd (`s6-svc -r /run/service/svc-agent-term`) |
+| Start in the dashboard does nothing visible | the message at the bottom right; `ct$ agent-ls` | A new folder waits at the trust question: open its Terminal and answer it |
 | Agent dashboard: 502/530 or a Cloudflare error | `vm$ ./bootstrap.sh --check` | Add the Public Hostname (`code-server:8790`) in the tunnel; check the service: `docker compose logs code-server` |
 | No 5h/7d limits in `~/.claude/agent-state/` | the session has had no answer yet | The limits arrive with the first API response (subscription logins only) |
 | tmux exits immediately in the container | `echo $SHELL` is `/bin/false` | Fixed by `/etc/tmux.conf` in the image; rebuild if missing |

@@ -14,7 +14,9 @@ case "$mode" in ""|--continue) ;; *) die "unknown option: $mode" ;; esac
 resolve_project "$folder"
 name=$(session_name "$REL")
 
-cmd=(claude)
+# Through an interactive bash, so Claude gets the same environment as a code-server terminal
+# (fnm picks the folder's Node version, ...), also when the dashboard starts it.
+cmd=(bash -ic 'exec "$@"' agent claude)
 [ "$mode" = --continue ] && cmd+=(--continue)
 cmd+=(--remote-control "$name")
 

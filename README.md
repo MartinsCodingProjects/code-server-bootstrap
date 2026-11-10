@@ -262,14 +262,38 @@ files above and receives the agent sessions' telemetry; its database is
 - **Sessions:** one card per project folder (running agent sessions, folders with a
   session in the last 24 hours): status (*works*, *needs permission*, *waits for input*,
   *confirm folder* for the trust question, *error*, *Claude exited*, *stopped*), model,
-  context use, estimated cost and time, git branch and changes, PR, the last event, links
-  to the folder in code-server and to the history. The top bar shows the 5-hour and 7-day
-  limits with their reset times. What needs you comes first.
+  context use, estimated cost and time, git branch and changes, PR, the last event. Buttons:
+  **Terminal** (the session's tmux screen in the browser, the same as `agent-attach`: type,
+  answer permission prompts), **Start** / **Resume** (`agent-start [--continue]`),
+  **Stop**, the history, the session's details, the folder in code-server, claude.ai/code.
+  The top bar shows the 5-hour and 7-day limits with their reset times. What needs you
+  comes first; selected folders that are not running show as *not started*.
 - **History:** every event of all projects, newest first and live. Filter by project (a
   parent folder includes its subfolders), session, category, time range and text; the
   filters are part of the URL, so a filtered view can be bookmarked. Click an event for its
   full record; export as JSONL or CSV. Telemetry details (every API request, tool timing)
   are a category of their own, off by default.
+- **Usage:** for 7 to 90 days, all projects or one: tokens (input, output, cache), estimated
+  cost at list price (not billed on a subscription), active time of the agents and of you,
+  time spent waiting for your permission, lines changed, commits and PRs, API requests,
+  errors and median latency, cache hit ratio; tokens or cost per day by project (hover for
+  the numbers), the 5-hour and 7-day limits over time, and a table per project. Tokens, cost
+  and time come from the telemetry, so only sessions started with `agent-start` (or the
+  dashboard) count.
+- **Session details:** model, context, cost, tokens, events per category, context use over
+  time, all events of the session, and the conversation itself (read from Claude Code's
+  transcript on request, last 400 entries; files outside `~/.claude/projects` are refused).
+- **Session Config:** the folders below `projects/`, two levels deep (hidden folders and
+  `node_modules`, `dist`, `build`, ... left out), with checkboxes. The selection is saved in
+  `config/agent-dashboard/selection.json` and is what the Sessions page shows; **Start
+  selected** runs `agent-start` for every selected folder that is not running yet. Folders
+  that are no repository open to show their subfolders, repositories stay closed.
+
+Sessions started from the dashboard run exactly like `agent-start` in a terminal, through an
+interactive bash, so fnm picks the folder's Node version as in the IDE. The web terminal is
+ttyd (port 7681, loopback only), reached only through the dashboard, which checks the Access
+token and refuses requests from other sites (Origin check, and a header that cross-site
+forms cannot send).
 
 **Hostname:** `./bootstrap.sh --agents` (also asked on the first run) stores the hostname
 (e.g. `agents.example.com`), the IDE address for the links and two values from Cloudflare
@@ -279,8 +303,8 @@ Access, then prints the checklist:
 2. Add the hostname to the Access application that protects the IDE.
 3. Team domain (Zero Trust > Settings) and that application's AUD tag (Access >
    Applications > Configure > Basic information). The dashboard verifies the Access token
-   on every request itself, because it can control sessions: a missing Access rule must not
-   open it. Without these two values it refuses everything that comes through the tunnel.
+   on every request itself, because it controls sessions and has a terminal: a missing
+   Access rule must not open it. Without these two values it refuses everything that comes through the tunnel.
 
 Without a hostname the dashboard is still there, inside the IDE: open
 `https://<ide>/proxy/8790/` (with the trailing slash), behind code-server's password.
@@ -296,7 +320,7 @@ Without a hostname the dashboard is still there, inside the IDE: open
 | `patches/` | Build-time workaround for a code-server cookie bug (fails the build if code-server changed) |
 | `docker/svc-db-forward/` | Supervised service that forwards `127.0.0.1:3306` in code-server to MariaDB |
 | `agents/` | Agent sessions: `agent-*` commands, the event hook and status line, the managed settings that register them, and the dashboard (`agents/dashboard/`, Python, tests in `tests/`) |
-| `docker/svc-agent-dashboard/` | Supervised service that runs the agent dashboard on port 8790 in code-server |
+| `docker/svc-agent-dashboard/`, `docker/svc-agent-term/` | Supervised services in code-server: the agent dashboard (port 8790) and its web terminal (ttyd, loopback port 7681) |
 | `mariadb/initdb.d/` | First-start SQL for the database (the `dev_*` privileges) |
 | `.env.example` | Documents the variables `bootstrap.sh` writes (also the pinned versions) |
 | `config/` | code-server user data and logins (git-ignored) |
@@ -321,9 +345,11 @@ ends running tmux sessions and Claude processes.
    - `CLOUDFLARED_VERSION`: the default in `docker-compose.yml` and `.env.example`.
    - `MARIADB_VERSION` (optional): `.env.example` and the default in `docker-compose.yml`;
      stay on an LTS line and read MariaDB's upgrade notes before a major jump.
-   - `DOCKER_CLI_VERSION`, `UV_VERSION` and `FNM_VERSION` (optional): the `ARG`s in
-     `Dockerfile`; the tags are `docker:<version>-cli`, `ghcr.io/astral-sh/uv:<version>`
-     and fnm's GitHub releases.
+   - `DOCKER_CLI_VERSION`, `UV_VERSION`, `FNM_VERSION` and `TTYD_VERSION` (optional): the
+     `ARG`s in `Dockerfile`; the tags are `docker:<version>-cli`, `ghcr.io/astral-sh/uv:<version>`,
+     and fnm's and ttyd's (`tsl0922/ttyd`) GitHub releases.
+   - The agent dashboard's Python packages (optional): `cd agents/dashboard && uv lock --upgrade
+     && uv run pytest`, commit `uv.lock`.
    - `NODE_MAJOR` (the image's Node): the `ARG` in `Dockerfile`; move to the next even
      major once it is LTS (Node 26 from late October 2026).
    - `PLAYWRIGHT_VERSION` (optional): the `ARG` in `Dockerfile`; it only decides which

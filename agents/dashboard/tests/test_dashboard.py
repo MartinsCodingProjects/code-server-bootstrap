@@ -200,3 +200,116 @@ def test_prune(cfg):
     ingest.prune(store, cfg)
     assert store.query_events() == []
     assert not (cfg.events_dir / "2020-01-01.jsonl").exists()
+
+
+# --- stage 3: control --------------------------------------------------------------------------
+
+from agent_dashboard import control, usage  # noqa: E402
+
+
+def test_folders_and_selection(cfg, monkeypatch, tmp_path):
+    (cfg.projects_dir / "client-x" / "node_modules").mkdir()
+    (cfg.projects_dir / ".hidden").mkdir()
+    (tmp_path / "outside").mkdir()
+    (cfg.projects_dir / "escape").symlink_to(tmp_path / "outside")
+    monkeypatch.setattr(control, "tmux_sessions", lambda: {"solo": {
+        "name": "solo", "project": "solo", "created": 1, "attached": 0, "dead": False}})
+    rels = [f["rel"] for f in control.folders(cfg, ["client-x/webshop"])]
+    assert rels[:3] == ["client-x", "client-x/webshop", "escape"]
+    assert "client-x/node_modules" not in rels and ".hidden" not in rels
+    by = {f["rel"]: f for f in control.folders(cfg, ["client-x/webshop"])}
+    assert by["client-x/webshop"]["selected"] and by["solo"]["running"] and by["solo"]["git"]
+    assert not control.valid_folder(cfg, "escape")  # symlink out of PROJECTS_DIR
+    assert not control.valid_folder(cfg, "../outside") and not control.valid_folder(cfg, "/etc")
+    assert not control.valid_folder(cfg, "") and not control.valid_folder(cfg, "nope")
+    assert control.save_selection(cfg, ["solo", "nope", "client-x/webshop/", "../outside"]) == ["client-x/webshop", "solo"]
+    assert json.loads((cfg.data_dir / "selection.json").read_text())["folders"] == ["client-x/webshop", "solo"]
+
+
+def test_control_api_needs_header_and_valid_folders(cfg, monkeypatch):
+    calls = []
+    monkeypatch.setattr(control, "_agent", lambda *a: calls.append(a) or {"ok": True, "output": "started"})
+    with TestClient(create_app(cfg)) as client:
+        assert client.post("/api/sessions/start", json={"folders": ["solo"]}).status_code == 403
+        hdr = {"X-Agent-Dashboard": "1"}
+        evil = {**hdr, "Origin": "https://evil.example", "Host": "agents.example.com"}
+        assert client.post("/api/sessions/start", json={"folders": ["solo"]}, headers=evil).status_code == 403
+        r = client.post("/api/sessions/start", json={"folders": ["solo", "../x"], "resume": True}, headers=hdr).json()
+        assert [x["ok"] for x in r["results"]] == [True, False]
+        assert calls == [("agent-start", "solo", "--continue")]
+        assert client.post("/api/sessions/stop", json={"folder": "solo"}, headers=hdr).json()["ok"]
+        assert client.put("/api/selection", json={"folders": ["solo"]}, headers=hdr).json() == {"selection": ["solo"]}
+        assert client.get("/api/folders").json()["selection"] == ["solo"]
+        assert client.get("/term/").status_code == 502  # ttyd not running here
+
+
+def test_terminal_websocket_refuses_foreign_origin(cfg):
+    from starlette.websockets import WebSocketDisconnect
+    with TestClient(create_app(cfg)) as client:
+        with pytest.raises(WebSocketDisconnect):
+            with client.websocket_connect("/term/ws?arg=solo", headers={"Origin": "https://evil.example"}) as ws:
+                ws.receive_bytes()
+
+
+# --- stage 4: usage, session detail, transcript -------------------------------------------------
+
+def test_permission_waits():
+    ev = lambda ts, name, **d: {"ts": f"2026-11-10T10:{ts}.000Z", "session_id": "s", "project": "p", "event": name, "data": d}
+    waits = usage.permission_waits([
+        ev("00:00", "PermissionRequest"), ev("00:30", "Notification", notification_type="permission_prompt"),
+        ev("02:00", "PostToolUse"), ev("03:00", "PreToolUse")])
+    assert [w["ms"] for w in waits] == [120000]
+
+
+def test_usage_and_session_detail(cfg):
+    with TestClient(create_app(cfg)) as client:
+        now = norm_ts(time.time())
+        ns = str(int(time.time() * 1e9))
+        metrics = {"resourceMetrics": [{"resource": {"attributes": [{"key": "agent.project", "value": {"stringValue": "solo"}}]},
+            "scopeMetrics": [{"metrics": [
+                {"name": "claude_code.token.usage", "sum": {"dataPoints": [{"timeUnixNano": ns, "asDouble": 1000,
+                    "attributes": [{"key": "type", "value": {"stringValue": "input"}}, {"key": "session.id", "value": {"stringValue": "s1"}}]}]}},
+                {"name": "claude_code.cost.usage", "sum": {"dataPoints": [{"timeUnixNano": ns, "asDouble": 0.5, "attributes": []}]}},
+                {"name": "claude_code.active_time.total", "sum": {"dataPoints": [{"timeUnixNano": ns, "asDouble": 90,
+                    "attributes": [{"key": "type", "value": {"stringValue": "cli"}}]}]}}]}]}]}
+        client.post("/otlp/v1/metrics", json=metrics)
+        u = client.get("/api/usage", params={"days": 7}).json()
+        assert u["totals"]["tokens"] == 1000 and u["totals"]["cost"] == 0.5 and u["totals"]["active_agent_s"] == 90
+        assert u["per_project"]["solo"]["tokens"] == 1000 and len(u["days"]) == 7
+        assert client.get("/api/usage", params={"project": "client-x"}).json()["totals"].get("tokens") is None
+
+        tdir = cfg.claude_dir / "projects" / "x"
+        tdir.mkdir(parents=True)
+        tpath = tdir / "s1.jsonl"
+        tpath.write_text("\n".join(json.dumps(r) for r in [
+            {"type": "user", "timestamp": now, "message": {"role": "user", "content": "Baue den Login"}},
+            {"type": "assistant", "timestamp": now, "message": {"role": "assistant", "content": [
+                {"type": "text", "text": "Mache ich."},
+                {"type": "tool_use", "name": "Bash", "input": {"command": "npm test"}}]}},
+            {"type": "user", "timestamp": now, "message": {"role": "user", "content": [
+                {"type": "tool_result", "content": "1 failed", "is_error": True}]}},
+        ]) + "\n")
+        write_events(cfg, {**hook("SessionStart", ts=now), "transcript_path": str(tpath)}, day=now[:10])
+        (cfg.samples_dir / f"{now[:10]}.jsonl").write_text(json.dumps(
+            {"ts": now, "session_id": "s1", "project": "client-x/webshop", "context_window": {"used_percentage": 12},
+             "rate_limits": {"five_hour": {"used_percentage": 30}}}) + "\n")
+        for _ in range(30):
+            if client.get("/api/session/s1").status_code == 200:
+                break
+            time.sleep(0.1)
+        d = client.get("/api/session/s1").json()
+        assert d["session"]["project"] == "client-x/webshop" and d["series"][0]["context_pct"] == 12
+        assert d["tokens"] == {"input": 1000}
+        t = client.get("/api/session/s1/transcript").json()
+        assert [(i["kind"], i["role"]) for i in t["items"]] == [("text", "user"), ("text", "assistant"), ("tool", "assistant"), ("result", "tool")]
+        assert t["items"][2]["text"] == "npm test" and t["items"][3]["error"]
+        assert client.get("/api/usage").json()["limits"][0]["five_hour"] == 30
+
+
+def test_transcript_outside_claude_dir_refused(cfg, tmp_path):
+    store = Store(cfg.data_dir / "agents.db")
+    secret = tmp_path / "secret.jsonl"
+    secret.write_text('{"type":"user","message":{"role":"user","content":"x"}}\n')
+    write_events(cfg, {**hook("SessionStart"), "transcript_path": str(secret)})
+    ingest.ingest(store, cfg)
+    assert usage.transcript(store, cfg, "s1") is None

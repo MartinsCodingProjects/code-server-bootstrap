@@ -1,0 +1,8 @@
+#!/usr/bin/with-contenv bash
+# Web terminal for the agent dashboard (README, "Agent sessions"): ttyd on the loopback
+# interface only; the dashboard forwards /term/ to it after its Access check. The URL
+# argument picks the tmux session (/term/?arg=<name>), shown with agent-attach.
+exec s6-setuidgid abc env HOME=/config TERM=xterm-256color \
+    /usr/local/bin/ttyd --interface lo --port 7681 --base-path /term --writable --url-arg \
+    --client-option titleFixed=Agent --client-option fontSize=14 \
+    /usr/local/bin/agent-attach
