@@ -293,6 +293,13 @@ files above and receives the agent sessions' telemetry; its database is
   `config/agent-dashboard/selection.json` and is what the Sessions page shows; **Start
   selected** runs `agent-start` for every selected folder that is not running yet. Folders
   that are no repository open to show their subfolders, repositories stay closed.
+  **New folder** creates a project directly in `projects/` as a git repository (`git init`,
+  branch `main`) and selects it, so a project can start from nothing. **Delete** first shows
+  what would be lost (uncommitted changes, unpushed commits, a repository without remote,
+  a Claude session active in the last 30 minutes), asks you to type the folder's name, and
+  refuses while an agent session runs in it. It moves the folder to `projects/.trash/`; the
+  **trash** at the bottom of the page lists it with the days until it is deleted for good
+  (30) and puts it back where it was with **Restore**.
 
 Sessions started from the dashboard run exactly like `agent-start` in a terminal, through an
 interactive bash, so fnm picks the folder's Node version as in the IDE. The web terminal is

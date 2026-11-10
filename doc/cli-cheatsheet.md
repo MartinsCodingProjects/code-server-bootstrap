@@ -138,8 +138,8 @@ ct$ agent-stop client-x/webshop              # end Claude and close its tmux ses
 ct$ claude --remote-control my-name          # by hand: one interactive session with Remote Control
 ct$ tail -f ~/.claude/agent-events/$(date -u +%F).jsonl | jq -c '{ts,project,hook_event_name,tool_name,notification_type}'
 ct$ jq '{model: .model.id, ctx: .context_window.used_percentage, limits: .rate_limits}' ~/.claude/agent-state/*.json
-ct$ curl -s localhost:8790/api/overview | jq '.cards[] | {project, status_label, last_summary}'   # dashboard data
-ct$ curl -s 'localhost:8790/api/events?project=client-x&limit=20' | jq -r '.events[] | [.ts, .summary] | @tsv'
+ct$ ls $PROJECTS_DIR/.trash                  # folders deleted in the dashboard (gone for good after 30 days)
+ct$ mv $PROJECTS_DIR/.trash/<name>--<time> $PROJECTS_DIR/<name>   # restore by hand (the dashboard's trash does the same)
 ```
 
 The dashboard itself: `https://agents.<domain>` (Access login), or inside the IDE at

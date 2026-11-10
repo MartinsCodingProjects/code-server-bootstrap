@@ -402,19 +402,53 @@ function drawConfig() {
         f.git ? h("span", { class: "tag" }, "git") : null,
         f.running ? h("span", { class: "pill working" }, "läuft") : null,
         f.exited ? h("span", { class: "pill" }, "beendet") : null,
-        f.depth === 1 && f.children ? h("span", { class: "muted small" }, `${f.children} Unterordner`) : null));
+        f.depth === 1 && f.children ? h("span", { class: "muted small" }, `${f.children} Unterordner`) : null,
+        h("button", { class: "icon danger", title: `„${f.rel}“ löschen`, "aria-label": `${f.rel} löschen`,
+          onclick: () => deleteFolder(f).catch(showError) }, "Löschen")));
     }
     if (!list.children.length) list.append(h("div", { class: "empty", style: "border:0" }, "Keine Ordner."));
   }
 
+  const trashEl = h("section", { class: "panel trash" });
   main.replaceChildren(
     h("h1", {}, "Session Config"),
     h("p", { class: "muted" }, "Wähle die Ordner, an denen gerade gearbeitet wird (bis zwei Ebenen unter ",
       h("code", {}, cfgPage.root), "). „Ausgewählte starten“ startet für jeden Ordner, der noch nicht läuft, Claude mit Remote Control in einer eigenen tmux-Session."),
-    h("div", { class: "filters" }, filter, count, save, start),
+    h("div", { class: "filters" }, filter, count, save, start,
+      h("button", { onclick: () => newFolder().catch(showError) }, "Neuer Ordner")),
     list);
+  main.append(trashEl);
   updateCount();
   drawList();
+  drawTrash(trashEl).catch(showError);
+}
+
+async function drawTrash(el) {
+  const t = await api("api/trash");
+  if (!t.entries.length) {
+    el.replaceChildren(h("h2", {}, "Papierkorb"), h("p", { class: "note" },
+      `Leer. Gelöschte Ordner bleiben hier ${t.days} Tage, bevor sie endgültig verschwinden.`));
+    return;
+  }
+  const fmtDate = (s) => new Date(s).toLocaleString("de-DE", { day: "2-digit", month: "2-digit", year: "numeric", hour: "2-digit", minute: "2-digit" });
+  el.replaceChildren(
+    h("h2", {}, `Papierkorb (${t.entries.length})`),
+    h("p", { class: "note" }, `Gelöschte Ordner werden ${t.days} Tage nach dem Löschen endgültig entfernt.`),
+    h("div", { class: "tree" }, t.entries.map((e) => h("div", { class: "row" },
+      h("div", { class: "trash-main" },
+        h("div", { style: "font-weight:600" }, e.folder),
+        h("div", { class: "muted small" }, `gelöscht ${fmtDate(e.deleted)} · `,
+          h("span", { class: e.days_left <= 3 ? "soon" : "" },
+            e.days_left > 1 ? `endgültig gelöscht in ${e.days_left} Tagen` : e.days_left === 1 ? "endgültig gelöscht in einem Tag" : "wird heute endgültig gelöscht"),
+          ` (${fmtDate(e.purge)})`)),
+      h("button", { class: "icon restore", disabled: e.occupied,
+        title: e.occupied ? `„${e.folder}“ gibt es wieder; erst umbenennen oder löschen` : "an den alten Ort zurücklegen",
+        onclick: async (ev) => {
+          ev.target.disabled = true;
+          const r = await send("POST", "api/trash/restore", { id: e.id });
+          toast(r.output, !r.ok);
+          if (r.ok) { scheduleOverview(0); renderConfig(); } else ev.target.disabled = false;
+        } }, "Wiederherstellen")))));
 }
 
 // ----------------------------------------------------------------------------------------- charts
@@ -694,6 +728,83 @@ function _snap(snap) {
     context_pct: cw.used_percentage, context_tokens: (cw.total_input_tokens || 0) + (cw.total_output_tokens || 0),
     context_size: cw.context_window_size, cost_usd: cost.total_cost_usd, duration_ms: cost.total_duration_ms,
   };
+}
+
+// ------------------------------------------------------------------------- create / delete folders
+
+function modal(title, ...body) {
+  const dlg = h("dialog", { class: "modal" }, h("h2", {}, title), ...body);
+  document.body.append(dlg);
+  dlg.addEventListener("close", () => dlg.remove());
+  dlg.showModal();
+  return dlg;
+}
+
+async function newFolder() {
+  const name = h("input", { name: "name", required: true, autocomplete: "off", placeholder: "z. B. meine-app",
+    pattern: "[A-Za-z0-9][A-Za-z0-9._\\-]{0,63}" });
+  const sel = h("input", { type: "checkbox", checked: true, id: "nf-sel" });
+  const msg = h("p", { class: "note" });
+  const form = h("form", { method: "dialog" },
+    h("label", { class: "field" }, `Name (wird ${cfgPage.root}/<Name>)`, name),
+    h("p", { class: "note" }, "Buchstaben, Ziffern, Punkt, Unterstrich und Bindestrich. Der Ordner wird gleich als Git-Repository angelegt (git init, Branch main)."),
+    h("div", { class: "check" }, sel, h("label", { for: "nf-sel" }, "für Sessions auswählen")),
+    msg,
+    h("div", { class: "actions" },
+      h("button", { type: "button", onclick: () => dlg.close() }, "Abbrechen"),
+      h("button", { class: "primary", type: "submit" }, "Anlegen")));
+  form.addEventListener("submit", async (ev) => {
+    ev.preventDefault();
+    const r = await send("POST", "api/folders", { name: name.value.trim(), select: sel.checked });
+    if (!r.ok) { msg.textContent = r.output; msg.classList.add("bad"); return; }
+    dlg.close();
+    toast(r.output);
+    scheduleOverview(0);
+    renderConfig();
+  });
+  const dlg = modal("Neuer Projektordner", form);
+  name.focus();
+}
+
+const fmtBytes = (n) => n >= 1e9 ? (n / 1e9).toFixed(1) + " GB" : n >= 1e6 ? (n / 1e6).toFixed(1) + " MB" : Math.round(n / 1e3) + " kB";
+
+async function deleteFolder(f) {
+  const info = await api(`api/folders/info?folder=${encodeURIComponent(f.rel)}`);
+  const short = f.rel.split("/").pop();
+  const warnings = [];
+  for (const r of info.repos) {
+    if (r.changed) warnings.push(`${r.folder}: ${r.changed} nicht committete Änderung(en)`);
+    if (r.unpushed) warnings.push(`${r.folder}: ${r.unpushed} Commit(s) nicht gepusht`);
+    if (r.commits && !r.remote) warnings.push(`${r.folder}: Repository ohne Remote, die Commits gibt es nur hier`);
+    else if (r.commits && r.unpushed == null) warnings.push(`${r.folder}: Branch ohne Upstream, Push-Stand unbekannt`);
+  }
+  if (!info.repos.length && info.files) warnings.push("kein Git-Repository: die Dateien gibt es nur hier");
+  for (const p of info.recent) warnings.push(`${p}: eine Claude-Session war in den letzten 30 Minuten aktiv`);
+  const blocked = info.running.length > 0;
+  const confirmIn = h("input", { autocomplete: "off", placeholder: short, disabled: blocked });
+  const go = h("button", { class: "primary danger-bg", type: "submit", disabled: true }, "In den Papierkorb");
+  confirmIn.addEventListener("input", () => { go.disabled = confirmIn.value !== short; });
+  const msg = h("p", { class: "note" });
+  const form = h("form", { method: "dialog" },
+    h("p", {}, h("code", {}, `${cfgPage.root}/${f.rel}`), ` · ${info.capped ? "über " : ""}${fmtNum(info.files)} Dateien · ${fmtBytes(info.bytes)}`),
+    blocked ? h("p", { class: "warn-box" }, "Hier laufen Agent-Sessions: ", info.running.join(", "), ". Erst stoppen, dann löschen.") : null,
+    warnings.length ? h("ul", { class: "warn-box" }, warnings.map((w) => h("li", {}, w))) : null,
+    h("p", { class: "note" }, "Der Ordner kommt in den Papierkorb (", h("code", {}, "projects/.trash/"), ") und wird dort nach 30 Tagen endgültig gelöscht. Bis dahin lässt er sich unten auf dieser Seite wiederherstellen."),
+    h("label", { class: "field" }, `Zur Bestätigung „${short}“ eintippen`, confirmIn),
+    msg,
+    h("div", { class: "actions" },
+      h("button", { type: "button", onclick: () => dlg.close() }, "Abbrechen"), go));
+  form.addEventListener("submit", async (ev) => {
+    ev.preventDefault();
+    const r = await send("POST", "api/folders/delete", { folder: f.rel, confirm: confirmIn.value });
+    if (!r.ok) { msg.textContent = r.output; msg.classList.add("bad"); return; }
+    dlg.close();
+    toast(r.output);
+    scheduleOverview(0);
+    renderConfig();
+  });
+  const dlg = modal(`„${f.rel}“ löschen?`, form);
+  if (!blocked) confirmIn.focus();
 }
 
 // ----------------------------------------------------------------------------------------- router

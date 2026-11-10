@@ -859,7 +859,8 @@ vm$ df -h / && docker system df
     changes, untracked files, local-only branches), the code-server
     settings, extensions and shell history in `config/`, the agent history and
     usage data (`config/.claude/agent-*`, `config/agent-dashboard/`, including the
-    folder selection), Claude's conversation transcripts, and the MariaDB data
+    folder selection), Claude's conversation transcripts, the dashboard's trash
+    (`projects/.trash/`), and the MariaDB data
     (Docker volume `dev-server_mariadb-data`) unless you dumped it. Commit and push
     regularly (WIP branches are fine) and never keep the only copy of anything
     on the server.

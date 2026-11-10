@@ -340,3 +340,79 @@ def test_old_telemetry_rows_cleaned(cfg):
     store = Store(cfg.data_dir / "agents.db")
     rows = store.db.execute("SELECT event, data FROM events").fetchall()
     assert [(r["event"], json.loads(r["data"])) for r in rows] == [("api_request", {"model": "m"})]
+
+
+# --- creating and deleting project folders ------------------------------------------------------
+
+import subprocess  # noqa: E402
+
+
+def git(path, *args):
+    subprocess.run(["git", "-C", str(path), *args], check=True, capture_output=True,
+                   env={"GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@t", "GIT_COMMITTER_NAME": "t",
+                        "GIT_COMMITTER_EMAIL": "t@t", "HOME": str(path), "PATH": "/usr/bin:/bin"})
+
+
+def test_create_folder(cfg):
+    r = control.create_folder(cfg, "new-app")
+    assert r["ok"] and (cfg.projects_dir / "new-app" / ".git").is_dir()
+    assert not control.create_folder(cfg, "new-app")["ok"]  # exists
+    for bad in ("", ".hidden", "../up", "a/b", "x" * 65, "sp ace"):
+        assert not control.create_folder(cfg, bad)["ok"], bad
+
+
+def test_folder_info_and_trash(cfg, monkeypatch):
+    repo = cfg.projects_dir / "client-x" / "webshop"
+    git(repo, "init", "-q", "-b", "main")
+    (repo / "a.txt").write_text("x")
+    git(repo, "add", ".")
+    git(repo, "commit", "-q", "-m", "one")
+    (repo / "b.txt").write_text("y")
+    monkeypatch.setattr(control, "tmux_sessions", lambda: {})
+    info = control.folder_info(cfg, "client-x")
+    [r] = info["repos"]
+    assert (r["folder"], r["changed"], r["remote"], r["unpushed"], r["commits"]) == ("client-x/webshop", 1, None, None, 1)
+    assert info["files"] >= 2 and info["running"] == []
+
+    control.save_selection(cfg, ["client-x/webshop", "solo"])
+    assert not control.trash_folder(cfg, "client-x", "wrong")["ok"]
+    monkeypatch.setattr(control, "tmux_sessions", lambda: {"x": {
+        "name": "client-x_webshop", "project": "client-x/webshop", "created": 1, "attached": 0, "dead": False}})
+    assert "stoppen" in control.trash_folder(cfg, "client-x", "client-x")["output"]
+    monkeypatch.setattr(control, "tmux_sessions", lambda: {})
+    r = control.trash_folder(cfg, "client-x", "client-x")
+    assert r["ok"] and not (cfg.projects_dir / "client-x").exists()
+    assert (Path(r["trash"]) / "webshop" / "a.txt").exists()
+    assert json.loads((cfg.data_dir / "selection.json").read_text())["folders"] == ["solo"]
+    assert ".trash" not in [f["rel"] for f in control.folders(cfg, [])]
+    assert not control.trash_folder(cfg, ".trash", ".trash")["ok"]  # the trash itself
+    [t] = control.trash_list(cfg)
+    assert (t["folder"], t["days_left"], t["occupied"]) == ("client-x", 30, False)
+    (cfg.projects_dir / "client-x").mkdir()
+    assert "inzwischen" in control.restore_folder(cfg, t["id"])["output"]
+    (cfg.projects_dir / "client-x").rmdir()
+    assert control.restore_folder(cfg, t["id"])["ok"]
+    assert (repo / "a.txt").exists() and control.trash_list(cfg) == []
+    assert not control.restore_folder(cfg, t["id"])["ok"]
+    old = cfg.projects_dir / ".trash" / "gone--20200101-000000"
+    old.mkdir()
+    control.purge_trash(cfg)
+    assert not old.exists()
+
+
+def test_folder_api(cfg, monkeypatch):
+    monkeypatch.setattr(control, "tmux_sessions", lambda: {})
+    hdr = {"X-Agent-Dashboard": "1"}
+    with TestClient(create_app(cfg)) as client:
+        assert client.post("/api/folders", json={"name": "fresh"}).status_code == 403  # no header
+        r = client.post("/api/folders", json={"name": "fresh"}, headers=hdr).json()
+        assert r["ok"] and client.get("/api/folders").json()["selection"] == ["fresh"]
+        info = client.get("/api/folders/info", params={"folder": "fresh"}).json()
+        assert info["repos"][0]["commits"] == 0 and info["recent"] == []
+        assert client.get("/api/folders/info", params={"folder": "../x"}).status_code == 404
+        r = client.post("/api/folders/delete", json={"folder": "fresh", "confirm": "fresh"}, headers=hdr).json()
+        assert r["ok"] and client.get("/api/folders").json()["selection"] == []
+        [t] = client.get("/api/trash").json()["entries"]
+        assert client.post("/api/trash/restore", json={"id": t["id"]}).status_code == 403  # no header
+        assert client.post("/api/trash/restore", json={"id": t["id"]}, headers=hdr).json()["ok"]
+        assert (cfg.projects_dir / "fresh" / ".git").is_dir()

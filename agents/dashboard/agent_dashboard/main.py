@@ -12,6 +12,7 @@ import io
 import ipaddress
 import logging
 from contextlib import asynccontextmanager
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from urllib.parse import urlsplit
 
@@ -21,7 +22,7 @@ from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse, Str
 from fastapi.staticfiles import StaticFiles
 
 from . import config, control, ingest, live, term, usage
-from .events import CATEGORIES, dumps, from_otel_logs, from_otel_metrics
+from .events import CATEGORIES, dumps, from_otel_logs, from_otel_metrics, norm_ts
 from .store import Store
 
 log = logging.getLogger("agent_dashboard")
@@ -84,6 +85,7 @@ def create_app(cfg: config.Config | None = None) -> FastAPI:
                 loop_time = asyncio.get_running_loop().time()
                 if loop_time - last_prune > 6 * 3600:
                     await asyncio.to_thread(ingest.prune, store, cfg)
+                    await asyncio.to_thread(control.purge_trash, cfg)
                     last_prune = loop_time
             except Exception:  # keep going; the files stay the record
                 log.exception("ingest failed")
@@ -274,6 +276,36 @@ def create_app(cfg: config.Config | None = None) -> FastAPI:
     @app.post("/api/sessions/stop")
     async def api_stop(folder: str = Body(..., embed=True)):
         return await asyncio.to_thread(control.stop, cfg, folder)
+
+    @app.post("/api/folders")
+    async def api_create_folder(name: str = Body(..., embed=True), select: bool = Body(True, embed=True)):
+        r = await asyncio.to_thread(control.create_folder, cfg, name)
+        if r["ok"] and select:
+            control.save_selection(cfg, live.selection(cfg) + [r["folder"]])
+        return r
+
+    @app.get("/api/folders/info")
+    async def api_folder_info(folder: str):
+        info = await asyncio.to_thread(control.folder_info, cfg, folder)
+        if not info:
+            raise HTTPException(404, "no such folder")
+        # sessions outside the dashboard (claude typed by hand) only show up as recent events
+        recent = store.sessions(norm_ts(datetime.now(timezone.utc) - timedelta(minutes=30)))
+        info["recent"] = sorted({s["project"] for s in recent if s["project"] and s["status"] != "ended"
+                                 and (s["project"] == folder or s["project"].startswith(folder + "/"))})
+        return info
+
+    @app.post("/api/folders/delete")
+    async def api_delete_folder(folder: str = Body(..., embed=True), confirm: str = Body(..., embed=True)):
+        return await asyncio.to_thread(control.trash_folder, cfg, folder, confirm)
+
+    @app.get("/api/trash")
+    async def api_trash():
+        return {"entries": await asyncio.to_thread(control.trash_list, cfg), "days": control.TRASH_DAYS}
+
+    @app.post("/api/trash/restore")
+    async def api_restore(id: str = Body(..., embed=True)):
+        return await asyncio.to_thread(control.restore_folder, cfg, id)
 
     # --- web terminal: ttyd on 127.0.0.1:7681 behind this app's checks ------------------------
 

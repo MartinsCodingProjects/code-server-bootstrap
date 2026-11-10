@@ -202,3 +202,26 @@ table.data th { color: var(--muted); font-weight: 600; }
 .msg.result { font-family: var(--mono); font-size: 12px; color: var(--muted); background: var(--bg); border: 1px dashed var(--line); max-height: 160px; overflow: auto; }
 .msg.result.err { color: var(--bad); }
 .msg time { display: block; font-size: 11px; color: var(--muted); margin-bottom: 2px; font-family: inherit; }
+
+/* dialogs, folder actions */
+.modal { border: 1px solid var(--line); border-radius: var(--radius); background: var(--panel); color: var(--text);
+  padding: 18px; width: min(520px, calc(100vw - 32px)); box-shadow: 0 10px 40px rgb(0 0 0 / 25%); }
+.modal::backdrop { background: rgb(0 0 0 / 40%); }
+.modal h2 { font-size: 17px; margin: 0 0 12px; overflow-wrap: anywhere; }
+.modal form { display: flex; flex-direction: column; gap: 10px; }
+.modal .actions { justify-content: flex-end; margin-top: 4px; }
+.field { display: flex; flex-direction: column; gap: 4px; font-size: 13px; color: var(--muted); }
+.field input, .field select { color: var(--text); width: 100%; }
+.check { display: flex; align-items: center; gap: 8px; font-size: 14px; }
+.check input { width: 18px; height: 18px; margin: 0; accent-color: var(--accent); }
+.note.bad { color: var(--bad); }
+.warn-box { margin: 0; padding: 8px 12px 8px 28px; background: var(--warn-soft); color: var(--text); border-radius: 8px; font-size: 13px; }
+p.warn-box { padding-left: 12px; }
+.tree .pill { margin-left: 0; }
+.tree button.icon { margin-left: auto; font-size: 12px; padding: 3px 9px; color: var(--bad); background: transparent; }
+button.danger-bg { background: var(--bad); border-color: var(--bad); color: #fff; }
+.trash { margin-top: 16px; }
+.trash .tree { margin-top: 6px; }
+.trash-main { min-width: 0; flex: 1 1 200px; overflow-wrap: anywhere; }
+.soon { color: var(--bad); font-weight: 600; }
+.tree button.restore { color: var(--accent); margin-left: auto; }
