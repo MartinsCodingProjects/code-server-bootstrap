@@ -1,0 +1,24 @@
+#!/usr/bin/env bash
+# agent-stop FOLDER
+# Ends Claude in the folder's tmux session the way you would (Ctrl+C twice, so the session's
+# end is recorded), then closes the tmux session. The conversation stays resumable with
+# `agent-start FOLDER --continue`.
+set -euo pipefail
+. /usr/local/lib/agents/agent-common.sh
+
+[ -n "${1:-}" ] || die "usage: agent-stop FOLDER"
+resolve_project "$1"
+name=$(session_name "$REL")
+has_session "$name" || { echo "$name: not running"; exit 0; }
+
+if [ "$(session_state "$name")" = running ]; then
+  tmux send-keys -t "=$name:" C-c
+  sleep 0.5
+  tmux send-keys -t "=$name:" C-c
+  for _ in $(seq 20); do
+    [ "$(session_state "$name")" = exited ] && break
+    sleep 0.5
+  done
+fi
+tmux kill-session -t "=$name"
+echo "$name: stopped"

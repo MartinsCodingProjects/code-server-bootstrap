@@ -18,7 +18,7 @@ ARG PLAYWRIGHT_VERSION=1.52.0
 ARG PLAYWRIGHT_BROWSERS=chromium
 
 RUN apt-get update \
- && apt-get install -y --no-install-recommends curl ca-certificates gnupg tmux git socat mariadb-client make openjdk-17-jdk-headless python3 python3-venv python3-pip \
+ && apt-get install -y --no-install-recommends curl ca-certificates gnupg tmux git jq socat mariadb-client make openjdk-17-jdk-headless python3 python3-venv python3-pip \
  && install -m 0755 -d /etc/apt/keyrings \
  && curl -fsSL https://deb.nodesource.com/gpgkey/nodesource-repo.gpg.key | gpg --dearmor -o /etc/apt/keyrings/nodesource.gpg \
  && echo "deb [signed-by=/etc/apt/keyrings/nodesource.gpg] https://deb.nodesource.com/node_${NODE_MAJOR}.x nodistro main" > /etc/apt/sources.list.d/nodesource.list \
@@ -57,6 +57,15 @@ RUN chmod 755 /etc/s6-overlay/s6-rc.d/svc-db-forward/run \
  && mkdir -p /etc/s6-overlay/s6-rc.d/svc-db-forward/dependencies.d \
  && touch /etc/s6-overlay/s6-rc.d/svc-db-forward/dependencies.d/init-services \
  && touch /etc/s6-overlay/s6-rc.d/user/contents.d/svc-db-forward
+
+# Agent sessions (see README): agent-start/-stop/-ls/-attach run Claude Code with Remote
+# Control per project folder in tmux; managed settings register the hooks and status line
+# that record every session's events and usage for the agent dashboard, for all sessions.
+COPY agents/bin/ /usr/local/bin/
+COPY agents/lib/agent-common.sh agents/hooks/agent-event agents/hooks/agent-statusline /usr/local/lib/agents/
+COPY agents/managed-settings.json /etc/claude-code/managed-settings.json
+RUN chmod 755 /usr/local/bin/agent-* /usr/local/lib/agents/agent-event /usr/local/lib/agents/agent-statusline \
+ && chmod 644 /usr/local/lib/agents/agent-common.sh /etc/claude-code/managed-settings.json
 
 # Workaround for a code-server cookie bug with per-port hostnames (see the patch file).
 COPY patches/code-server-cookie-domain.js /tmp/code-server-cookie-domain.js

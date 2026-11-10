@@ -1,0 +1,53 @@
+#!/usr/bin/env bash
+# Claude Code status line (registered in /etc/claude-code/managed-settings.json). Claude
+# passes the session's state as JSON: context window, cost, 5-hour and 7-day limits, ...
+#  - keeps the latest state per session in ~/.claude/agent-state/<session_id>.json;
+#  - appends a sample to ~/.claude/agent-samples/YYYY-MM-DD.jsonl when context or limits
+#    changed, at most once a minute per session otherwise (the dashboard's charts);
+#  - prints the line: your own status line command from ~/.claude/settings.json if you
+#    have one (managed settings win over it, so it is called from here), else a short default.
+input=$(cat)
+now=$(date +%s)
+state_dir=${AGENT_STATE_DIR:-$HOME/.claude/agent-state}
+samples_dir=${AGENT_SAMPLES_DIR:-$HOME/.claude/agent-samples}
+
+record() {
+  local sid snap prev key prev_key prev_at
+  sid=$(jq -r '.session_id // empty' <<<"$input") || return
+  [ -n "$sid" ] || return
+  mkdir -p "$state_dir" "$samples_dir" || return
+  snap=$state_dir/$sid.json
+  key=$(jq -c '[.context_window.used_percentage, .rate_limits.five_hour.used_percentage,
+                .rate_limits.seven_day.used_percentage, .model.id]' <<<"$input") || return
+  prev_key=; prev_at=0
+  if [ -f "$snap" ]; then
+    prev=$(jq -c '[._sample_key, ._sampled_at]' "$snap" 2>/dev/null) || prev='[null,0]'
+    prev_key=$(jq -c '.[0]' <<<"$prev"); prev_at=$(jq -r '.[1] // 0' <<<"$prev")
+  fi
+  local sampled_at=$prev_at
+  if [ "$key" != "$prev_key" ] || [ $((now - prev_at)) -ge 60 ]; then
+    sampled_at=$now
+    jq -c --arg project "${AGENT_PROJECT:-}" --argjson now "$now" '{
+        ts: ($now | todate), project: (if $project == "" then null else $project end), session_id,
+        model: .model.id, context_window, cost, rate_limits,
+        cache_hit_ratio: .prompt_cache.hit_ratio}' <<<"$input" \
+      >>"$samples_dir/$(date -u +%F).jsonl"
+  fi
+  jq --arg project "${AGENT_PROJECT:-}" --arg tmux "${AGENT_TMUX:-}" \
+     --argjson now "$now" --argjson key "$key" --argjson sampled "$sampled_at" '
+     . + {_updated_at: $now, _sample_key: $key, _sampled_at: $sampled,
+          _project: (if $project == "" then null else $project end), _tmux: (if $tmux == "" then null else $tmux end)}' \
+     <<<"$input" >"$snap.tmp.$$" && mv "$snap.tmp.$$" "$snap"
+}
+record 2>/dev/null
+
+own=$(jq -r '.statusLine.command // empty' "$HOME/.claude/settings.json" 2>/dev/null)
+if [ -n "$own" ]; then
+  bash -c "$own" <<<"$input"
+else
+  jq -r '[(.model.display_name // "?"),
+          "ctx \(.context_window.used_percentage // 0 | floor)%",
+          (.rate_limits.five_hour.used_percentage | if . then "5h \(floor)%" else empty end),
+          (.rate_limits.seven_day.used_percentage | if . then "7d \(floor)%" else empty end)]
+         | join(" · ")' <<<"$input" 2>/dev/null
+fi

@@ -1,0 +1,23 @@
+#!/usr/bin/env bash
+# Claude Code hook for every event (registered in /etc/claude-code/managed-settings.json).
+# Appends the event as one JSON line to ~/.claude/agent-events/YYYY-MM-DD.jsonl, the
+# history the agent dashboard reads. Adds the time and the project (AGENT_PROJECT, set by
+# agent-start), shortens long strings and drops tool output. It prints nothing (stdout of
+# some hooks becomes part of Claude's context) and always exits 0, so it never blocks.
+dir=${AGENT_EVENTS_DIR:-$HOME/.claude/agent-events}
+mkdir -p "$dir" 2>/dev/null || exit 0
+file=$dir/$(date -u +%F).jsonl
+
+line=$(jq -c \
+  --arg ts "$(date -u +%FT%T.%3NZ)" \
+  --arg project "${AGENT_PROJECT:-}" \
+  --arg tmux "${AGENT_TMUX:-}" '
+  del(.tool_response)
+  | walk(if type == "string" and length > 500 then .[:500] + "…" else . end)
+  | {ts: $ts, project: (if $project == "" then null else $project end), tmux: (if $tmux == "" then null else $tmux end)} + .
+' 2>/dev/null) || exit 0
+[ -n "$line" ] || exit 0
+
+# One writer at a time, so lines from parallel sessions never interleave.
+{ flock 9 && printf '%s\n' "$line" >&9; } 9>>"$file" 2>/dev/null
+exit 0

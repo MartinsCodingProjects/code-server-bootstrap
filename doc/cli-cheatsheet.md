@@ -122,6 +122,20 @@ ct$ claude                         # Claude Code; login: copy the URL by hand, p
 ct$ docker ps                      # the VM's Docker, through the mounted socket
 ```
 
+Agent sessions (Claude Code with Remote Control, one tmux session per project folder;
+folders are relative to `projects/`; see the README, "Agent sessions"):
+
+```bash
+ct$ agent-start client-x/webshop             # start; also listed on claude.ai/code and in the Claude app as client-x_webshop
+ct$ agent-start client-x/webshop --continue  # resume the folder's last conversation (after a restart)
+ct$ agent-attach client-x/webshop            # same conversation in the terminal; detach: Ctrl+b d
+ct$ agent-ls                                 # name, running/exited, attached terminals, folder
+ct$ agent-stop client-x/webshop              # end Claude and close its tmux session
+ct$ claude --remote-control my-name          # by hand: one interactive session with Remote Control
+ct$ tail -f ~/.claude/agent-events/$(date -u +%F).jsonl | jq -c '{ts,project,hook_event_name,tool_name,notification_type}'
+ct$ jq '{model: .model.id, ctx: .context_window.used_percentage, limits: .rate_limits}' ~/.claude/agent-state/*.json
+```
+
 Dev servers (each in its own terminal tab or tmux window; open `https://<port>-dev.<domain>`):
 
 ```bash
@@ -293,6 +307,9 @@ Answers are remembered in `setup/setup.env` (git-ignored). See
 | `sudo: command not found` on a fresh Debian | root password was set at install | `su -`, `apt install -y sudo`, `usermod -aG sudo <user>`, log in again |
 | VM did not come back after a power cut | `virsh list --all`, `virsh dominfo devvm` | `virsh autostart devvm`; check the BIOS "Power On after AC loss" |
 | A dev app hostname (`5173-dev.<domain>`) shows 401, 503 or a Cloudflare error | `vm$ ./bootstrap.sh --check` | 401: log in at the IDE first; 503/530/no DNS: add the hostname in Cloudflare (Public Hostname, HTTP, `code-server:8443`) and to Access; app not listening: start it on any interface, `ECONNREFUSED` means nothing listens on that port |
+| An agent session does nothing after `agent-start` | `agent-attach <folder>` | Claude waits at the trust question for a new folder, or at a permission prompt: answer it there or in the Claude app |
+| An agent session is missing in the Claude app | `agent-ls`; `agent-attach <folder>` | `exited`: run `agent-start` again; Claude not logged in: run `claude` once and log in |
+| No 5h/7d limits in `~/.claude/agent-state/` | the session has had no answer yet | The limits arrive with the first API response (subscription logins only) |
 | tmux exits immediately in the container | `echo $SHELL` is `/bin/false` | Fixed by `/etc/tmux.conf` in the image; rebuild if missing |
 | `./bootstrap.sh` says permission denied on docker | group not active yet | Log in again, or use `sudo docker` |
 | Disk almost full | `df -h`, `docker system df` | Section 6, "Disk space" |

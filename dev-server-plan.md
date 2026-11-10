@@ -144,6 +144,12 @@ the notebook, SSH to the host and manage the guest there (for example, with
   rules are the barriers. Do not run Claude Code with permission prompts disabled
   (`--dangerously-skip-permissions`) in this container. Health is checked on
   demand with `./bootstrap.sh --check`; there is no continuous monitoring.
+- Agent sessions (README, "Agent sessions") are ordinary Claude Code sessions in
+  code-server and keep their permission prompts; Remote Control lets you answer
+  them from the Claude app, through Anthropic's servers and your Claude login. Their
+  hook events, status line data and telemetry stay in `config/` on the VM and
+  contain commands, file paths and shortened prompts, so treat `config/` as
+  private (mode 700).
 
 ## Step-by-Step Build Plan
 

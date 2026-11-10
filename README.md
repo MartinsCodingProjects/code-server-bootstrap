@@ -203,6 +203,54 @@ supervised `socat` forwarder), so a project connects exactly as it would on a la
   from other containers, no route out, persistence across recreating either container,
   and the forwarder returning by itself after code-server is recreated.
 
+## Agent sessions (Claude Code per project folder)
+
+One Claude Code session per project folder, each in its own tmux session inside
+code-server, with **Remote Control** on: the same conversation shows in the code-server
+terminal, on [claude.ai/code](https://claude.ai/code) and in the Claude app, and you can
+type in any of them. Each session runs in its folder, so it loads that folder's
+`CLAUDE.md`, skills and settings.
+
+```bash
+ct$ agent-start client-x/webshop          # start (folder relative to projects/, git optional)
+ct$ agent-attach client-x/webshop         # watch / type in the terminal; detach: Ctrl+b d
+ct$ agent-ls                              # running agent sessions
+ct$ agent-stop client-x/webshop           # end it (Ctrl+C twice, then close the tmux session)
+ct$ agent-start client-x/webshop --continue   # resume that folder's last conversation
+```
+
+- **The folder is the identity**, not the repository: its path below `projects/` names
+  the session (`client-x/webshop` becomes `client-x_webshop` in tmux and in the Claude
+  app, because tmux rejects `/`, `.` and `:`). Folders without git work too.
+- **Trust prompt:** Claude asks once per folder whether you trust it. A new folder's
+  session waits at that question until you answer it with `agent-attach`.
+- **Permissions:** sessions ask before acting, as usual; answer in the terminal or in the
+  app. Do not run them with `bypassPermissions` here (see Notes: the Docker socket).
+- **Restarts:** rebuilding or restarting code-server ends all tmux sessions; start them
+  again with `--continue`. When Claude exits by itself, the tmux session is kept with its
+  last screen; `agent-start` starts Claude in it again.
+
+**Monitoring data** (input for the agent dashboard; also useful with `jq`). The image
+registers a hook for every Claude Code event and a status line in
+`/etc/claude-code/managed-settings.json`, so they apply to every session, not only to
+agent sessions, without touching your own settings in `config/.claude/`:
+
+| File (in code-server, `~` = `/config`) | Content |
+|---|---|
+| `~/.claude/agent-events/YYYY-MM-DD.jsonl` | One line per event: session start/end, prompts, tool calls, permission requests, notifications (waiting for you), stop, API errors, compaction, subagents, tasks, model switches, ... with time, session ID and project. Long strings are cut at 500 characters, tool output is left out. |
+| `~/.claude/agent-state/<session_id>.json` | Latest status line data per session: model, context window, cost, 5-hour and 7-day limits with reset time, prompt cache, PR. |
+| `~/.claude/agent-samples/YYYY-MM-DD.jsonl` | The same over time: a line when context or limits change, otherwise at most one a minute. |
+
+Not hooked on purpose: `WorktreeCreate`/`WorktreeRemove` (a hook there would replace
+git's own worktree handling), `FileChanged` (needs a file list), `MessageDisplay` and
+`Setup`. Agent sessions also send Claude Code's OpenTelemetry metrics and events (tokens,
+cost and duration per request, tool results, active time) to the dashboard at
+`127.0.0.1:8790`; without the dashboard they are dropped. Prompt and response texts are
+not part of the telemetry. All of this stays in `config/` on the VM.
+
+Your own status line still works: if `~/.claude/settings.json` sets
+`statusLine.command`, the image's status line records its data and then runs yours.
+
 ## Layout
 
 | Path | Purpose |
@@ -212,6 +260,7 @@ supervised `socat` forwarder), so a project connects exactly as it would on a la
 | `docker-compose.yml` | `code-server`, `cloudflared` (profile `tunnel`) and `mariadb` (profile `db`) |
 | `patches/` | Build-time workaround for a code-server cookie bug (fails the build if code-server changed) |
 | `docker/svc-db-forward/` | Supervised service that forwards `127.0.0.1:3306` in code-server to MariaDB |
+| `agents/` | Agent sessions: `agent-*` commands, the event hook and status line, and the managed settings that register them (see "Agent sessions") |
 | `mariadb/initdb.d/` | First-start SQL for the database (the `dev_*` privileges) |
 | `.env.example` | Documents the variables `bootstrap.sh` writes (also the pinned versions) |
 | `config/` | code-server user data and logins (git-ignored) |

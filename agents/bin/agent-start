@@ -1,0 +1,46 @@
+#!/usr/bin/env bash
+# agent-start FOLDER [--continue]
+# Runs Claude Code with Remote Control for one project folder in a detached tmux session.
+# FOLDER is relative to PROJECTS_DIR (or absolute inside it); git is optional. The tmux
+# session and the Remote Control session (claude.ai/code, Claude app) get the same name.
+# --continue resumes the folder's last conversation instead of starting a new one.
+# Watch or type in it with `agent-attach FOLDER`; it keeps running when you detach.
+set -euo pipefail
+. /usr/local/lib/agents/agent-common.sh
+
+folder=${1:-}; mode=${2:-}
+[ -n "$folder" ] || die "usage: agent-start FOLDER [--continue]"
+case "$mode" in ""|--continue) ;; *) die "unknown option: $mode" ;; esac
+resolve_project "$folder"
+name=$(session_name "$REL")
+
+cmd=(claude)
+[ "$mode" = --continue ] && cmd+=(--continue)
+cmd+=(--remote-control "$name")
+
+if has_session "$name"; then
+  owner=$(session_project "$name")
+  [ -z "$owner" ] || [ "$owner" = "$REL" ] || die "tmux session '$name' belongs to '$owner'"
+  if [ "$(session_state "$name")" = running ]; then
+    echo "$name: already running (agent-attach $REL)"
+    exit 0
+  fi
+  # Claude quit earlier; start it again in the kept pane.
+  tmux respawn-pane -k -t "=$name:" -c "$ABS" "${cmd[@]}"
+  echo "$name: restarted"
+  exit 0
+fi
+
+# AGENT_PROJECT/AGENT_TMUX tag every hook event and status line snapshot with the project,
+# even after Claude changes into a subfolder. The OTEL_* variables send Claude Code's
+# telemetry to the agent dashboard (if it is not running, the data is dropped silently).
+tmux new-session -d -s "$name" -c "$ABS" \
+  -e AGENT_PROJECT="$REL" -e AGENT_TMUX="$name" \
+  -e CLAUDE_CODE_ENABLE_TELEMETRY=1 \
+  -e OTEL_METRICS_EXPORTER=otlp -e OTEL_LOGS_EXPORTER=otlp \
+  -e OTEL_EXPORTER_OTLP_PROTOCOL=http/json \
+  -e OTEL_EXPORTER_OTLP_ENDPOINT="http://127.0.0.1:${AGENT_DASHBOARD_PORT:-8790}/otlp" \
+  -e OTEL_LOG_TOOL_DETAILS=1 \
+  -e OTEL_RESOURCE_ATTRIBUTES="agent.project=$REL" \
+  "${cmd[@]}" \; set-option -w remain-on-exit on
+echo "$name: started in $ABS (agent-attach $REL)"

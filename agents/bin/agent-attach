@@ -1,0 +1,17 @@
+#!/usr/bin/env bash
+# agent-attach FOLDER|NAME
+# Shows the agent's tmux session in this terminal (same conversation as on claude.ai/code
+# and in the Claude app). Detach with Ctrl+b d; Claude keeps running.
+set -euo pipefail
+. /usr/local/lib/agents/agent-common.sh
+
+[ -n "${1:-}" ] || die "usage: agent-attach FOLDER|NAME"
+if has_session "$1" && [ -n "$(session_project "$1")" ]; then
+  name=$1
+else
+  resolve_project "$1"
+  name=$(session_name "$REL")
+  has_session "$name" || die "$REL is not running (agent-start $REL)"
+fi
+[ -z "${TMUX:-}" ] || exec tmux switch-client -t "=$name"
+exec tmux attach-session -t "=$name"

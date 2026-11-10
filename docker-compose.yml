@@ -25,6 +25,7 @@ services:
       TZ: ${TZ:-Europe/Berlin}
       PASSWORD: ${PASSWORD}
       DEFAULT_WORKSPACE: ${PROJECTS_DIR}
+      PROJECTS_DIR: ${PROJECTS_DIR}
       # Dev apps in the browser without changing project code (see README): code-server
       # proxies {{port}} to a hostname of its own; Node resolves localhost to IPv4 first
       # (Vite would otherwise listen on IPv6 only and the proxy cannot connect); Vite

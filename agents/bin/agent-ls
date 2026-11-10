@@ -1,0 +1,11 @@
+#!/usr/bin/env bash
+# agent-ls: the agent sessions in tmux (started by agent-start), one per line:
+# NAME  STATE (running/exited)  ATTACHED (terminals watching)  FOLDER
+set -euo pipefail
+. /usr/local/lib/agents/agent-common.sh
+
+{ tmux list-sessions -F '#{session_name} #{session_attached}' 2>/dev/null || true; } | while read -r name attached; do
+  project=$(session_project "$name")
+  [ -n "$project" ] || continue
+  printf '%-30s %-8s %-3s %s\n' "$name" "$(session_state "$name")" "$attached" "$project"
+done
