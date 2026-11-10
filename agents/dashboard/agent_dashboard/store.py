@@ -7,7 +7,7 @@ import threading
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-from .events import dumps, hook_status, norm_ts
+from .events import OTEL_IDENTITY, OTEL_IGNORED, dumps, hook_status, norm_ts
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS events(
@@ -44,6 +44,18 @@ class Store:
         self.db.execute("PRAGMA synchronous=NORMAL")
         self.db.executescript(SCHEMA)
         self.lock = threading.Lock()
+        self._clean_otel()
+
+    def _clean_otel(self):
+        """Rows stored before ingest filtered telemetry: drop the bookkeeping events and the
+        account identity (a no-op once clean)."""
+        paths = ", ".join(f"'$.\"{k}\"'" for k in sorted(OTEL_IDENTITY))
+        with self.db:
+            self.db.execute(f"DELETE FROM events WHERE source='otel' AND event IN ({','.join('?' * len(OTEL_IGNORED))})",
+                            sorted(OTEL_IGNORED))
+            self.db.execute(f"UPDATE events SET data=json_remove(data, {paths})"
+                            " WHERE source='otel' AND data LIKE '%\"user.%'")
+            self.db.execute(f"UPDATE metrics SET attrs=json_remove(attrs, {paths}) WHERE attrs LIKE '%\"user.%'")
 
     # --- writing ---------------------------------------------------------------------------------
 

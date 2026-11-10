@@ -261,7 +261,26 @@ def _otel_summary(name: str, a: dict) -> str:
             return f"Eingabe ({int(_num(a.get('prompt_length')))} Zeichen)"
         case "assistant_response":
             return f"Antwort ({int(_num(a.get('response_length')))} Zeichen)"
+        case "mcp_server_connection":
+            server = a.get("mcp_server.name") or a.get("server_name") or a.get("server_scope") or "MCP"
+            return f"MCP-Server {server}: {a.get('status', '?')}" + (f" ({_short(a.get('error'), 100)})" if a.get("error") else "")
     return name
+
+
+# Startup bookkeeping Claude Code sends with every session (our own hooks being registered
+# and run, plugins, managed settings): nothing to learn from, so not stored.
+OTEL_IGNORED = {"hook_registered", "hook_execution_start", "hook_execution_complete", "plugin_loaded",
+                "managed_settings_resolved"}
+# Account identity on every record: not needed for the history, so not stored either.
+OTEL_IDENTITY = {"user.email", "user.id", "user.account_uuid", "user.account_id", "organization.id"}
+
+
+def _otel_category(name: str, a: dict) -> str:
+    if name == "api_error":
+        return "error"
+    if name == "mcp_server_connection":
+        return "config" if a.get("status") in ("connected", "success") else "error"
+    return "api"
 
 
 def from_otel_logs(body: dict) -> list[dict]:
@@ -273,6 +292,10 @@ def from_otel_logs(body: dict) -> list[dict]:
                 a = attrs(rec.get("attributes"))
                 name = str(a.get("event.name") or _any_value(rec.get("body", {})) or "otel")
                 name = name.removeprefix("claude_code.")
+                if name in OTEL_IGNORED:
+                    continue
+                for key in OTEL_IDENTITY:
+                    a.pop(key, None)
                 ts = a.get("event.timestamp") or rec.get("timeUnixNano") or rec.get("observedTimeUnixNano")
                 out.append({
                     "ts": norm_ts(ts),
@@ -280,7 +303,7 @@ def from_otel_logs(body: dict) -> list[dict]:
                     "project": res.get("agent.project") or a.get("agent.project"),
                     "session_id": a.get("session.id") or res.get("session.id"),
                     "event": name,
-                    "category": "error" if name == "api_error" else "api",
+                    "category": _otel_category(name, a),
                     "summary": _otel_summary(name, a),
                     "data": a,
                 })
@@ -295,7 +318,7 @@ def from_otel_metrics(body: dict) -> list[dict]:
             for m in sm.get("metrics", []):
                 data = m.get("sum") or m.get("gauge") or {}
                 for dp in data.get("dataPoints", []):
-                    a = attrs(dp.get("attributes"))
+                    a = {k: v for k, v in attrs(dp.get("attributes")).items() if k not in OTEL_IDENTITY}
                     value = dp.get("asDouble", dp.get("asInt"))
                     out.append({
                         "ts": norm_ts(dp.get("timeUnixNano")),

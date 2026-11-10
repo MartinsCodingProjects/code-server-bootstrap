@@ -133,6 +133,16 @@ OTLP_METRICS = {"resourceMetrics": [{
 
 
 def test_otel_parsing():
+    noisy = json.loads(json.dumps(OTLP_LOGS))
+    records = noisy["resourceLogs"][0]["scopeLogs"][0]["logRecords"]
+    records[0]["attributes"].append({"key": "user.email", "value": {"stringValue": "me@example.com"}})
+    records.append({"attributes": [{"key": "event.name", "value": {"stringValue": "hook_registered"}}]})
+    records.append({"attributes": [{"key": "event.name", "value": {"stringValue": "mcp_server_connection"}},
+                                   {"key": "status", "value": {"stringValue": "failed"}},
+                                   {"key": "server_scope", "value": {"stringValue": "github"}}]})
+    api, mcp = from_otel_logs(noisy)
+    assert "user.email" not in api["data"]
+    assert (mcp["category"], mcp["summary"]) == ("error", "MCP-Server github: failed")
     [e] = from_otel_logs(OTLP_LOGS)
     assert (e["event"], e["project"], e["session_id"], e["category"]) == ("api_request", "client-x/webshop", "s1", "api")
     assert "1200 ein / 300 aus" in e["summary"]
@@ -319,3 +329,14 @@ def test_transcript_outside_claude_dir_refused(cfg, tmp_path):
     write_events(cfg, {**hook("SessionStart"), "transcript_path": str(secret)})
     ingest.ingest(store, cfg)
     assert usage.transcript(store, cfg, "s1") is None
+
+
+def test_old_telemetry_rows_cleaned(cfg):
+    store = Store(cfg.data_dir / "agents.db")
+    with store.db:
+        store.db.execute("INSERT INTO events(ts, source, event, category, data) VALUES"
+                         " ('t', 'otel', 'hook_registered', 'api', '{}'),"
+                         " ('t', 'otel', 'api_request', 'api', '{\"user.email\": \"a@b\", \"model\": \"m\"}')")
+    store = Store(cfg.data_dir / "agents.db")
+    rows = store.db.execute("SELECT event, data FROM events").fetchall()
+    assert [(r["event"], json.loads(r["data"])) for r in rows] == [("api_request", {"model": "m"})]

@@ -64,7 +64,7 @@ served; reach it from your notebook with `ssh -L 8443:127.0.0.1:8443 devvm`.
 
 | Command | Purpose |
 |---|---|
-| `./bootstrap.sh` | First run or re-run; keeps an existing `.env` |
+| `./bootstrap.sh` | First run or re-run; keeps an existing `.env` (Cloudflare checklists only when it asks questions; otherwise `--check` lists what is missing) |
 | `./bootstrap.sh --reconfigure` | Ask everything again (password, token, dev hostnames, database, agent dashboard); existing database passwords are kept |
 | `./bootstrap.sh --update` | `git pull`, re-run the pulled script, refresh host-derived values and pinned versions in `.env`, rebuild, restart |
 | `./bootstrap.sh --check` | Read-only health check of the running stack (non-zero exit on failure) |
@@ -249,7 +249,10 @@ git's own worktree handling), `FileChanged` (needs a file list), `MessageDisplay
 `Setup`. Agent sessions also send Claude Code's OpenTelemetry metrics and events (tokens,
 cost and duration per request, tool results, active time) to the dashboard at
 `127.0.0.1:8790`; without the dashboard they are dropped. Prompt and response texts are
-not part of the telemetry. All of this stays in `config/` on the VM.
+not part of the telemetry; the dashboard also drops the account identity (e-mail,
+account and organization IDs) and Claude Code's startup bookkeeping (hooks and plugins
+being loaded) before storing it, but keeps MCP server connections, so a failing server
+shows in the history. All of this stays in `config/` on the VM.
 
 Your own status line still works: if `~/.claude/settings.json` sets
 `statusLine.command`, the image's status line records its data and then runs yours.

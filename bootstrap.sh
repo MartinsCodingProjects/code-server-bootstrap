@@ -787,6 +787,7 @@ chmod 700 config
 
 if [ ! -f .env ] || [ "$MODE" = "--reconfigure" ]; then
   write_env
+  ASKED=1
 else
   info "Keeping existing .env (use --reconfigure to change password/token)"
   sync_env
@@ -797,8 +798,13 @@ info "Building and starting"
 "${DOCKER[@]}" compose up -d --build --remove-orphans
 "${DOCKER[@]}" compose ps
 
-print_dev_checklist
-print_agents_checklist
+# The Cloudflare checklists after questions were asked; otherwise --check says what is missing.
+if [ -n "${ASKED:-}" ]; then
+  print_dev_checklist
+  print_agents_checklist
+else
+  echo "Cloudflare hostnames: ./bootstrap.sh --check reports any that are missing."
+fi
 
 if grep -q '^TUNNEL_TOKEN=.' .env; then
   echo "Tunnel enabled. Check: ${DOCKER[*]} compose logs --tail=30 cloudflared"
