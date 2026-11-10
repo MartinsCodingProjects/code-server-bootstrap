@@ -57,6 +57,11 @@ async function stopSession(folder) {
   scheduleOverview(300);
 }
 
+// A second Claude in a folder where one already runs by hand: ask first.
+function guardExternal(c) {
+  return !c.external || confirm(`In „${c.project}“ läuft bereits ein Claude außerhalb des Dashboards. Trotzdem eine zweite Session starten?`);
+}
+
 const termUrl = (name) => `term/?arg=${encodeURIComponent(name)}`;
 
 const fmtTime = (ts) => new Date(ts).toLocaleTimeString("de-DE", { hour: "2-digit", minute: "2-digit", second: "2-digit" });
@@ -156,6 +161,8 @@ function card(c) {
       c.tmux ? [h("dt", {}, "tmux"), h("dd", {}, `seit ${fmtTime(c.tmux.started)}` +
         (c.tmux.attached ? ` · ${c.tmux.attached} Terminal(s) verbunden` : ""))] : null),
     c.last_summary ? h("div", { class: "last" }, c.last_summary, " ", h("span", { class: "muted" }, ago(c.last_ts))) : null,
+    c.external ? h("div", { class: "note muted small" },
+      "Läuft außerhalb des Dashboards (von Hand gestartetes claude, z. B. im code-server-Terminal): kein Web-Terminal, Stopp nur dort.") : null,
     h("div", { class: "actions" }, cardActions(c, histLink)));
 }
 
@@ -167,8 +174,8 @@ function cardActions(c, histLink) {
   } }, label);
   return [
     live ? h("a", { href: termUrl(c.name), target: "_blank", rel: "noopener", class: "primary" }, "Terminal") : null,
-    !live && c.exists ? act("Starten", () => startSessions([c.project]), "primary") : null,
-    !live && c.exists && c.session_id ? act("Fortsetzen", () => startSessions([c.project], true)) : null,
+    !live && c.exists ? act("Starten", async () => { if (guardExternal(c)) await startSessions([c.project]); }, c.external ? "" : "primary") : null,
+    !live && c.exists && c.session_id ? act("Fortsetzen", async () => { if (guardExternal(c)) await startSessions([c.project], true); }) : null,
     c.tmux ? act(c.status === "exited" ? "Schließen" : "Stoppen", () => stopSession(c.project), "danger") : null,
     h("a", { href: histLink }, "Verlauf"),
     c.session_id ? h("a", { href: `#/session/${encodeURIComponent(c.session_id)}` }, "Details") : null,

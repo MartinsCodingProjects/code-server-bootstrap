@@ -168,6 +168,7 @@ def overview(store: Store, cfg: Config) -> dict:
                 session = s
         session = session or latest_by_project.get(project)
 
+        external = False
         if t:
             if t["dead"]:
                 status = "exited"
@@ -178,6 +179,7 @@ def overview(store: Store, cfg: Config) -> dict:
         elif session and session["status"] != "ended" and \
                 session["last_ts"] >= norm_ts(now - EXTERNAL_ALIVE):
             status = session["status"]  # a claude started by hand, outside agent-start
+            external = True
         elif session:
             status = "stopped"
         else:
@@ -192,6 +194,7 @@ def overview(store: Store, cfg: Config) -> dict:
             "status": status,
             "status_label": CARD_STATUS_LABELS.get(status, status),
             "tmux": {"attached": t["attached"], "started": norm_ts(t["created"])} if t else None,
+            "external": external,
             "session_id": session["session_id"] if session else None,
             "last_ts": session["last_ts"] if session else None,
             "last_summary": session["last_summary"] if session else None,

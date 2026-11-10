@@ -31,6 +31,8 @@ CREATE TABLE IF NOT EXISTS files(path TEXT PRIMARY KEY, offset INTEGER NOT NULL)
 """
 
 EVENT_COLUMNS = "id, ts, source, project, session_id, event, category, summary"
+# Housekeeping events: kept in the history, but not shown as a session's last action.
+BACKGROUND_EVENTS = {"InstructionsLoaded", "ConfigChange", "CwdChanged", "DirectoryAdded", "PostToolBatch"}
 
 
 class Store:
@@ -76,10 +78,11 @@ class Store:
             return  # late arrival; the newer state stands
         self.db.execute(
             "UPDATE sessions SET project=COALESCE(?, project), tmux=COALESCE(?, tmux),"
-            " transcript_path=COALESCE(?, transcript_path), last_ts=?, last_event=?, last_summary=?"
-            " WHERE session_id=?",
-            (e["project"], d.get("tmux"), d.get("transcript_path"), e["ts"], e["event"], e["summary"],
-             e["session_id"]))
+            " transcript_path=COALESCE(?, transcript_path), last_ts=? WHERE session_id=?",
+            (e["project"], d.get("tmux"), d.get("transcript_path"), e["ts"], e["session_id"]))
+        if e["event"] not in BACKGROUND_EVENTS:  # the card's "last event" shows what the agent did
+            self.db.execute("UPDATE sessions SET last_event=?, last_summary=? WHERE session_id=?",
+                            (e["event"], e["summary"], e["session_id"]))
         if status:
             self.db.execute("UPDATE sessions SET status=?, status_ts=? WHERE session_id=?",
                             (status, e["ts"], e["session_id"]))

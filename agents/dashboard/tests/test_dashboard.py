@@ -83,6 +83,11 @@ def test_ingest_is_incremental_and_tracks_status(cfg):
     assert [e["event"] for e in new] == ["PermissionRequest"]
     s = store.latest_sessions_by_tmux()["client-x_webshop"]
     assert s["status"] == "permission"
+    # housekeeping events do not replace the last action shown on the card
+    write_events(cfg, hook("InstructionsLoaded", ts="2026-11-10T10:00:03.000Z", file_path="CLAUDE.md"))
+    ingest.ingest(store, cfg)
+    s = store.latest_sessions_by_tmux()["client-x_webshop"]
+    assert s["last_event"] == "PermissionRequest" and s["last_ts"] == "2026-11-10T10:00:03.000Z"
     # an older event arriving late does not overwrite the status
     write_events(cfg, hook("Stop", ts="2026-11-10T09:00:00.000Z"))
     ingest.ingest(store, cfg)
@@ -158,6 +163,7 @@ def test_overview_cards(cfg, monkeypatch):
     monkeypatch.setattr(live, "tmux_sessions", lambda: {})
     by = {c["project"]: c for c in live.overview(store, cfg)["cards"]}
     assert by["client-x/webshop"]["status"] == "permission"  # recent session outside tmux
+    assert by["client-x/webshop"]["external"] and not by["solo"]["external"]
     assert o["cards"][0]["project"] == "client-x/webshop"  # needs you: first
     assert o["limits"]["five_hour"]["used_percentage"] == 61
 
