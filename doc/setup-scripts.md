@@ -110,6 +110,9 @@ Tested during development, on a notebook without KVM:
   and the whole script from a clean directory against real Docker: a fresh install,
   `--check`, and `--mariadb` disable and re-enable. That run found and fixed a bug that
   stopped fresh installs after the token prompt.
+- The agent sessions and the dashboard in the built image (with a stand-in for `claude`),
+  and `--agents` and `--check` on the live VM with the real Cloudflare route and Access.
+  The agent questions in a fresh `bootstrap.sh` run were not run through a terminal.
 
 **Not tested on real hardware** (needs `nft`, libvirt and the cloud image): applying the
 firewall with the rollback timer, `virt-install` with the cloud image and seed disk,

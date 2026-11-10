@@ -21,7 +21,8 @@ Notebook on LAN/WLAN
                           ├── code-server
                           │     ├── projects and persistent user config
                           │     ├── Claude Code and GitHub CLI/auth
-                          │     ├── tmux
+                          │     ├── tmux (one session per agent: Claude with Remote Control)
+                          │     ├── agent dashboard :8790 + web terminal (ttyd, loopback)
                           │     └── Docker CLI + VM Docker socket
                           ├── cloudflared
                           │     └── outbound Cloudflare Tunnel
@@ -31,6 +32,8 @@ Notebook on LAN/WLAN
 
 Browser → Cloudflare Access → Tunnel → cloudflared → code-server
 Browser → <port>-dev.<domain> (Access) → Tunnel → code-server proxy → dev app on that port
+Browser → agents.<domain> (Access) → Tunnel → agent dashboard (checks the Access token)
+Claude app / claude.ai/code ⇄ Anthropic ⇄ agent sessions (Remote Control, outbound only)
 ```
 
 The physical host runs Debian and KVM/libvirt, but does not need Docker. The VM
@@ -653,6 +656,28 @@ not use a wildcard Access rule if the domain also hosts other sites. Without Acc
 a name still answers 401 until you are logged in to the IDE, but Access is the first
 gate. `./bootstrap.sh --check` reports names that are missing or not behind Access.
 
+**3.4 Agent dashboard (optional)**
+
+The dashboard (README, "Agent sessions") runs in code-server on port 8790 and needs
+its own hostname, e.g. `agents.yourdomain.com`:
+
+1. Tunnel: Networks → Tunnels → your tunnel → Routes → Add route → Published
+   application: subdomain `agents`, your domain, no path, service HTTP, URL
+   `code-server:8790`.
+2. Access: Access → Applications → the application from 3.1 → Configure → add
+   `agents.yourdomain.com` as a further domain (same policy).
+3. Copy two values: the application's **AUD tag** (Configure → Basic information,
+   "Application Audience (AUD) Tag", 64 characters) and the **team domain**
+   (Settings → Team name and domain, `<team>.cloudflareaccess.com`). The dashboard
+   checks every request's Access token against them, so it stays closed even if the
+   Access rule were missing. If you ever recreate the Access application, its AUD tag
+   changes: enter the new one with `--agents`.
+4. In the VM: `./bootstrap.sh --agents` (hostname, IDE URL
+   `https://dev.yourdomain.com`, team domain, AUD tag; the first `./bootstrap.sh` asks
+   the same, Enter skips), then `./bootstrap.sh --check`: "agent dashboard checks the
+   Access token" and "agents.<domain> is set up and behind Cloudflare Access".
+5. Open `https://agents.yourdomain.com` on the notebook and the phone.
+
 ### Phase 4: Authentication and workflow
 
 Run these in the code-server integrated terminal.
@@ -665,8 +690,14 @@ ct$ gh api user --jq '"\(.id)+\(.login)@users.noreply.github.com"'   # your nore
 ct$ git config --global user.name  "Your Name"
 ct$ git config --global user.email "<the noreply address printed above>"
 ct$ claude                        # follow the interactive login; complete the browser flow
+ct$ claude doctor                 # "Remote Control": no errors (needs the claude.ai subscription login)
 ct$ terminal-w                    # create or re-attach the named session
 ```
+
+Agent sessions (README, "Agent sessions"): start one for a test folder with
+`agent-start <folder>` or the dashboard's Session Config, answer the folder's trust
+question once (`agent-attach <folder>` or the dashboard's Terminal button), and check
+that the session shows up in the Claude app under the folder's name.
 
 `terminal-w` is an alias for `tmux new -As work`, baked into the image
 (`/etc/bash.bashrc`) by the Dockerfile that `bootstrap.sh` builds. It is not
@@ -788,7 +819,8 @@ the host reboot.
   when the data directory is created: to change one later, use `ALTER USER` inside
   MariaDB, then update `.env` and `config/mariadb-credentials.txt`.
 - After every update run `./bootstrap.sh --check` (clock, Docker, compose, health,
-  tunnel, dev hostnames behind Access, database, container DNS, tools, disk).
+  tunnel, dev hostnames behind Access, database, agent hooks, dashboard, web terminal,
+  dashboard hostname and its Access settings, container DNS, tools, disk).
   Bumping code-server can make the build fail on purpose when the cookie patch no
   longer applies; MariaDB major versions are a deliberate bump.
 
@@ -818,13 +850,16 @@ vm$ df -h / && docker system df
     host keys: the notebook warns once, fix it with `ssh-keygen -R
     devhost.fritz.box`.
   - Re-created by you: the code-server password, a new GitHub token, the Claude
-    login, and the tunnel token (the tunnel and its hostname live in Cloudflare;
+    login, the dashboard's settings (`./bootstrap.sh --agents`: hostname, IDE URL,
+    team domain and AUD tag, all still in Cloudflare), and the tunnel token (the tunnel and its hostname live in Cloudflare;
     copy the token from the tunnel's connector page, and note that "Refresh
     token" invalidates the old one). Keep a copy of the notebook's
     `~/.ssh/id_ed25519_devhost`; it is not on the server.
   - **Lost:** anything in `projects/` that is not pushed to GitHub (uncommitted
     changes, untracked files, local-only branches), the code-server
-    settings, extensions and shell history in `config/`, and the MariaDB data
+    settings, extensions and shell history in `config/`, the agent history and
+    usage data (`config/.claude/agent-*`, `config/agent-dashboard/`, including the
+    folder selection), Claude's conversation transcripts, and the MariaDB data
     (Docker volume `dev-server_mariadb-data`) unless you dumped it. Commit and push
     regularly (WIP branches are fine) and never keep the only copy of anything
     on the server.
@@ -853,6 +888,10 @@ vm$ df -h / && docker system df
 - With the database enabled, code-server reaches it at `127.0.0.1:3306`; other
   containers and the internet cannot, and its data survives recreating either
   container.
+- With the agent dashboard set up, `https://agents.<domain>` opens after the Access
+  login (and refuses requests without a valid Access token), a session started from
+  Session Config appears in the Claude app and in the dashboard's Terminal, and its
+  events show in the history.
 - `./bootstrap.sh --check` ends with `0 failed`.
 - After a power cut or host reboot with no intervention, the VM, Docker,
   code-server, and the tunnel all come back, the isolation rules are active,
@@ -867,4 +906,6 @@ through Cloudflare Access and code-server, attach to tmux, and work in the
 persistent VM environment. Projects can use Docker inside that VM without
 access to the physical host's Docker daemon. Start a dev server with its normal
 command and open it at `https://<port>-dev.<domain>`; a project that needs a
-database connects to `127.0.0.1:3306`, exactly as on a laptop.
+database connects to `127.0.0.1:3306`, exactly as on a laptop. Agent sessions run
+per project folder in tmux, are reachable from the Claude app, and the dashboard at
+`https://agents.<domain>` shows their status, history and usage.

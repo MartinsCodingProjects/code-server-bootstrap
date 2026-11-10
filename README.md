@@ -44,7 +44,9 @@ Still by hand, because there is no API or it is physical: the Cloudflare tunnel,
 its public hostname and the Access policy (plan 2.1 and Phase 3; you paste the
 tunnel token into `bootstrap.sh`), the Cloudflare hostnames and Access entries for
 the dev app ports (`bootstrap.sh` prints the list; see "Developing in the browser"),
-the GitHub fine-grained token and the Claude login (plan Phase 4).
+the agent dashboard's route, Access entry, team domain and AUD tag (plan 3.4;
+`bootstrap.sh --agents` prints the checklist), the GitHub fine-grained token and the
+Claude login (plan Phase 4).
 
 ## Quick start (container stack only; inside the VM, as a normal user with sudo)
 
