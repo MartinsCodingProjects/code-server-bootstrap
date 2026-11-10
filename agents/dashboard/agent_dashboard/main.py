@@ -8,6 +8,7 @@ Access token for CF_ACCESS_AUD; without that configuration only this container m
 
 import asyncio
 import csv
+import hashlib
 import io
 import ipaddress
 import logging
@@ -18,7 +19,7 @@ from urllib.parse import urlsplit
 
 import jwt
 from fastapi import Body, FastAPI, HTTPException, Query, Request, WebSocket
-from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse, StreamingResponse
+from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
 from . import config, control, ingest, live, term, usage
@@ -324,11 +325,27 @@ def create_app(cfg: config.Config | None = None) -> FastAPI:
 
     # --- pages --------------------------------------------------------------------------------
 
+    # Asset URLs carry a hash of their content, so a new version is never served from a cache
+    # (the browser's, or Cloudflare's, which caches .js and .css by default).
+    def asset_version(name: str) -> str:
+        return hashlib.sha256((STATIC / name).read_bytes()).hexdigest()[:12]
+
+    index_html = (STATIC / "index.html").read_text()
+    for name in ("app.js", "style.css"):
+        index_html = index_html.replace(f'"static/{name}"', f'"static/{name}?v={asset_version(name)}"')
+
     @app.get("/")
     async def index():
-        return FileResponse(STATIC / "index.html", headers={"Cache-Control": "no-cache"})
+        return HTMLResponse(index_html, headers={"Cache-Control": "no-cache"})
 
     app.mount("/static", StaticFiles(directory=STATIC), name="static")
+
+    @app.middleware("http")
+    async def static_revalidate(request: Request, call_next):
+        response = await call_next(request)
+        if request.url.path.startswith("/static/"):
+            response.headers["Cache-Control"] = "no-cache"  # check with the server (ETag) every time
+        return response
     return app
 
 

@@ -189,7 +189,9 @@ def test_api_local_and_otlp(cfg):
         assert detail["data"]["input_tokens"] == 1200
         assert client.get("/api/events/export", params={"format": "csv", "cat": "api"}).text.startswith("ts,project")
         assert "categories" in client.get("/api/meta").json()
-        assert client.get("/").status_code == 200
+        page = client.get("/")
+        assert page.status_code == 200 and 'static/app.js?v=' in page.text and 'style.css?v=' in page.text
+        assert client.get("/static/app.js").headers["cache-control"] == "no-cache"
 
 
 def test_access_required_when_configured(cfg):
